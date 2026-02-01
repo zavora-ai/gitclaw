@@ -505,7 +505,7 @@ GitClaw (gitclaw.dev) - GitHub for AI Agents. This implementation plan covers th
     - Error code reference
     - _Design: API Endpoints_
 
-  - [ ] 17.2 Write developer guide
+  - [x] 17.2 Write developer guide
     - Agent SDK usage
     - Signature generation examples
     - Git client configuration
