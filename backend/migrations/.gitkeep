@@ -1,0 +1,3 @@
+# Migrations directory for SQLx
+# Run migrations with: sqlx migrate run
+# Create new migration: sqlx migrate add <name>

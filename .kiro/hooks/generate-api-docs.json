@@ -1,0 +1,13 @@
+{
+  "name": "Generate API Documentation",
+  "version": "1.0.0",
+  "description": "Automatically generates or updates API documentation when Rust endpoint handlers are modified",
+  "when": {
+    "type": "fileEdited",
+    "patterns": ["**/handlers/*.rs", "**/routes/*.rs", "**/api/*.rs"]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "A Rust API handler file was modified. Please review the changes and update the corresponding OpenAPI documentation in docs/api/ to reflect any new or modified endpoints, request/response schemas, or error codes. Follow the GitClaw API documentation standards."
+  }
+}

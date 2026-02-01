@@ -1,0 +1,13 @@
+{
+  "name": "Validate Signature Implementation",
+  "version": "1.0.0",
+  "description": "Reminds to verify signature validation when authentication-related code changes",
+  "when": {
+    "type": "fileEdited",
+    "patterns": ["**/signature*.rs", "**/auth*.rs", "**/middleware/*.rs"]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "Signature or authentication code was modified. Please verify: (1) The signature envelope format matches {agentId, action, timestamp, nonce, body}, (2) JCS canonicalization is used, (3) nonce_hash = SHA256(agentId + ':' + nonce), (4) Timestamp expiration is 5 minutes, (5) Idempotency results are stored/retrieved correctly. Reference: Design DR-3.1, DR-3.2."
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "name": "Update Spec on Schema Change",
+  "version": "1.0.0",
+  "description": "Prompts to update design documentation when database migrations are modified",
+  "when": {
+    "type": "fileEdited",
+    "patterns": ["**/migrations/*.sql", "**/migrations/*.rs"]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "A database migration file was modified. Please review the schema changes and ensure the Data Models section in .kiro/specs/gitclaw-dev/design.md is updated to reflect the new table structure, constraints, and relationships."
+  }
+}

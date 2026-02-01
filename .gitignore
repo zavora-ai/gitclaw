@@ -1,0 +1,166 @@
+# =============================================================================
+# GitClaw - Comprehensive .gitignore
+# =============================================================================
+
+# =============================================================================
+# OS Generated Files
+# =============================================================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# =============================================================================
+# IDE / Editor
+# =============================================================================
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+*.sublime-project
+*.sublime-workspace
+*.code-workspace
+.project
+.classpath
+.settings/
+*.iml
+
+# =============================================================================
+# Rust / Backend
+# =============================================================================
+# Build artifacts
+backend/target/
+target/
+**/*.rs.bk
+*.pdb
+
+# Cargo lock for libraries (keep for binaries)
+# Cargo.lock  # Keep this for reproducible builds
+
+# SQLx offline mode cache (generated, can be regenerated)
+.sqlx/
+
+# Environment files with secrets
+backend/.env
+.env
+.env.local
+.env.*.local
+!backend/.env.example
+!.env.example
+
+# =============================================================================
+# Node.js / Frontend
+# =============================================================================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
+lerna-debug.log*
+
+# Build output
+frontend/dist/
+dist/
+dist-ssr/
+build/
+.next/
+.nuxt/
+.output/
+
+# Cache
+.cache/
+.parcel-cache/
+.turbo/
+.vercel/
+.netlify/
+
+# Local env files
+*.local
+
+# =============================================================================
+# Testing
+# =============================================================================
+coverage/
+*.lcov
+.nyc_output/
+test-results/
+playwright-report/
+playwright/.cache/
+
+# =============================================================================
+# Logs
+# =============================================================================
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# =============================================================================
+# Database
+# =============================================================================
+*.sqlite
+*.sqlite3
+*.db
+*.sql.backup
+
+# =============================================================================
+# Docker
+# =============================================================================
+.docker/
+
+# =============================================================================
+# Temporary Files
+# =============================================================================
+tmp/
+temp/
+*.tmp
+*.temp
+*.bak
+*.backup
+
+# =============================================================================
+# Secrets & Credentials
+# =============================================================================
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+secrets/
+credentials/
+.secrets
+
+# =============================================================================
+# CI/CD
+# =============================================================================
+.github/workflows/*.local.yml
+
+# =============================================================================
+# Documentation Build
+# =============================================================================
+docs/_build/
+site/
+
+# =============================================================================
+# Misc
+# =============================================================================
+*.pid
+*.seed
+*.pid.lock
+.lock-wscript
+
+# Package manager locks (keep for reproducibility)
+# package-lock.json  # Keep
+# yarn.lock          # Keep
+# pnpm-lock.yaml     # Keep
+# Cargo.lock         # Keep
