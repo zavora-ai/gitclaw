@@ -2,19 +2,29 @@
 //!
 //! Processes incoming Git pushes, validating object integrity and updating branch refs.
 //! Implements DR-5.1 (Push Service) from the design document.
+//! Implements DR-S3-4.1 (Push with S3 Storage) for S3 object storage integration.
 //!
 //! Requirements: 5.1, 5.2, 5.3, 5.4, 5.5, 5.6
+//! S3 Requirements: 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7
+
+use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use sha1::{Digest as Sha1Digest, Sha1};
 use sha2::Sha256;
 use sqlx::PgPool;
 use thiserror::Error;
+use tracing::{debug, error, info, warn};
 
 use crate::models::{AccessRole, Visibility};
 use crate::services::audit::{AuditError, AuditEvent, AuditService};
 use crate::services::idempotency::{IdempotencyError, IdempotencyResult, IdempotencyService};
-use crate::services::signature::{SignatureEnvelope, SignatureError, SignatureValidator};
+use crate::services::object_storage::{
+    GitObjectType as StorageGitObjectType, ObjectStorageBackend, StorageError,
+};
+use crate::services::signature::{
+    SignatureEnvelope, SignatureError, SignatureValidator, get_agent_public_key_if_not_suspended,
+};
 
 /// Errors that can occur during push operations
 #[derive(Debug, Error)]
@@ -40,8 +50,13 @@ pub enum PushError {
     #[error("Ref not found: {0}")]
     RefNotFound(String),
 
+    /// Agent is suspended and cannot perform mutating operations
+    /// Requirements: 2.6 - Suspended agents must be rejected with SUSPENDED_AGENT error
+    #[error("Agent is suspended: {0}")]
+    Suspended(String),
+
     #[error("Signature validation failed: {0}")]
-    SignatureError(#[from] SignatureError),
+    SignatureError(SignatureError),
 
     #[error("Idempotency error: {0}")]
     IdempotencyError(#[from] IdempotencyError),
@@ -51,6 +66,23 @@ pub enum PushError {
 
     #[error("Audit error: {0}")]
     Audit(#[from] AuditError),
+
+    #[error("Storage error: {0}")]
+    StorageError(String),
+}
+
+impl From<SignatureError> for PushError {
+    fn from(err: SignatureError) -> Self {
+        match err {
+            SignatureError::Suspended(msg) => PushError::Suspended(msg),
+            SignatureError::MissingField(msg) if msg.starts_with("Agent not found:") => {
+                // Extract agent_id from the message
+                let agent_id = msg.strip_prefix("Agent not found: ").unwrap_or(&msg);
+                PushError::AgentNotFound(agent_id.to_string())
+            }
+            other => PushError::SignatureError(other),
+        }
+    }
 }
 
 /// Request for a ref update
@@ -107,12 +139,48 @@ pub struct GitObject {
     pub oid: String,
 }
 
-/// Push Service for handling Git push operations
+/// Details about S3 storage operation for audit logging
+///
+/// Requirements: 4.7, 3.6
 #[derive(Debug, Clone)]
+struct S3StorageDetails {
+    /// Type of storage used: "packfile" or "loose"
+    storage_type: String,
+    /// Pack hash if stored as packfile, None for loose objects
+    pack_hash: Option<String>,
+    /// Number of objects stored
+    objects_stored: usize,
+}
+
+/// Threshold for storing objects as packfile vs loose objects
+///
+/// Requirements: 4.2, 4.3
+/// Design Reference: DR-S3-4.1
+const PACKFILE_THRESHOLD: usize = 10;
+
+/// Push Service for handling Git push operations
+///
+/// Design Reference: DR-5.1, DR-S3-4.1
+#[derive(Clone)]
 pub struct PushService {
     pool: PgPool,
     signature_validator: SignatureValidator,
     idempotency_service: IdempotencyService,
+    /// Optional S3 object storage backend
+    /// When Some, objects are stored in S3 before updating refs
+    /// When None, objects are stored in PostgreSQL (legacy behavior)
+    object_storage: Option<Arc<dyn ObjectStorageBackend>>,
+}
+
+impl std::fmt::Debug for PushService {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PushService")
+            .field("pool", &"PgPool")
+            .field("signature_validator", &self.signature_validator)
+            .field("idempotency_service", &self.idempotency_service)
+            .field("object_storage", &self.object_storage.is_some())
+            .finish()
+    }
 }
 
 impl PushService {
@@ -121,13 +189,38 @@ impl PushService {
             signature_validator: SignatureValidator::default(),
             idempotency_service: IdempotencyService::new(pool.clone()),
             pool,
+            object_storage: None,
         }
+    }
+
+    /// Create a new PushService with S3 object storage backend
+    ///
+    /// Requirements: 4.1
+    /// Design Reference: DR-S3-4.1
+    ///
+    /// When object storage is configured, objects are stored in S3 before
+    /// updating refs in PostgreSQL, providing atomic guarantees.
+    pub fn with_object_storage(pool: PgPool, object_storage: Arc<dyn ObjectStorageBackend>) -> Self {
+        Self {
+            signature_validator: SignatureValidator::default(),
+            idempotency_service: IdempotencyService::new(pool.clone()),
+            pool,
+            object_storage: Some(object_storage),
+        }
+    }
+
+    /// Set the object storage backend
+    ///
+    /// This allows configuring S3 storage after construction.
+    pub fn set_object_storage(&mut self, object_storage: Arc<dyn ObjectStorageBackend>) {
+        self.object_storage = Some(object_storage);
     }
 
     /// Process a push request
     ///
     /// Requirements: 5.1, 5.2, 5.3, 5.4, 5.5, 5.6
     /// Design: DR-5.1 (Push Service)
+    #[allow(clippy::too_many_arguments)]
     pub async fn push(
         &self,
         repo_id: &str,
@@ -152,10 +245,12 @@ impl PushService {
                 return Ok(response);
             }
             IdempotencyResult::ReplayAttack { previous_action } => {
-                return Err(PushError::IdempotencyError(IdempotencyError::ReplayAttack {
-                    previous_action,
-                    attempted_action: ACTION.to_string(),
-                }));
+                return Err(PushError::IdempotencyError(
+                    IdempotencyError::ReplayAttack {
+                        previous_action,
+                        attempted_action: ACTION.to_string(),
+                    },
+                ));
             }
             IdempotencyResult::New => {}
         }
@@ -164,7 +259,9 @@ impl PushService {
         let repo = self.get_repository(repo_id).await?;
 
         // Verify write access via repo_access (Requirement 5.1)
-        let has_access = self.check_access(repo_id, agent_id, AccessRole::Write).await?;
+        let has_access = self
+            .check_access(repo_id, agent_id, AccessRole::Write)
+            .await?;
         if !has_access {
             return Err(PushError::AccessDenied(format!(
                 "Agent {} does not have write access to repository {}",
@@ -212,6 +309,19 @@ impl PushService {
         // Validate packfile format and unpack objects (Requirement 5.4)
         let objects = self.unpack_and_validate_packfile(packfile)?;
 
+        // Store objects in S3 BEFORE updating refs (atomic guarantee)
+        // Requirements: 4.1, 4.2, 4.3, 4.4, 4.5
+        // Design Reference: DR-S3-4.1
+        let storage_details = if let Some(ref storage) = self.object_storage {
+            // Store objects in S3 first - if this fails, refs won't be updated
+            let details = self
+                .store_objects_in_s3(storage.as_ref(), repo_id, &objects, packfile)
+                .await?;
+            Some(details)
+        } else {
+            None
+        };
+
         // Start transaction for atomic ref updates
         let mut tx = self.pool.begin().await?;
 
@@ -249,19 +359,38 @@ impl PushService {
             });
         }
 
-        // Store objects in the database (simplified - in real impl would store in object store)
-        for object in &objects {
-            self.store_object(&mut tx, repo_id, object).await?;
+        // Store objects in PostgreSQL if S3 storage is not configured (legacy behavior)
+        // When S3 is configured, objects were already stored before the transaction
+        if self.object_storage.is_none() {
+            for object in &objects {
+                self.store_object(&mut tx, repo_id, object).await?;
+            }
         }
 
-        // Append audit event (Requirement 5.6)
-        let audit_data = serde_json::json!({
-            "repo_id": repo_id,
-            "packfile_hash": packfile_hash,
-            "ref_updates": canonical_ref_updates,
-            "objects_count": objects.len(),
-            "force_push": ref_updates.iter().any(|r| r.force),
-        });
+        // Append audit event (Requirement 5.6, 4.7)
+        // Include S3 storage details when available
+        let audit_data = if let Some(ref details) = storage_details {
+            serde_json::json!({
+                "repo_id": repo_id,
+                "packfile_hash": packfile_hash,
+                "ref_updates": canonical_ref_updates,
+                "objects_count": objects.len(),
+                "force_push": ref_updates.iter().any(|r| r.force),
+                "storage": {
+                    "type": details.storage_type,
+                    "pack_hash": details.pack_hash,
+                    "objects_stored": details.objects_stored,
+                }
+            })
+        } else {
+            serde_json::json!({
+                "repo_id": repo_id,
+                "packfile_hash": packfile_hash,
+                "ref_updates": canonical_ref_updates,
+                "objects_count": objects.len(),
+                "force_push": ref_updates.iter().any(|r| r.force),
+            })
+        };
 
         AuditService::append_in_tx(
             &mut tx,
@@ -294,7 +423,6 @@ impl PushService {
 
         Ok(response)
     }
-
 
     /// Process a single ref update
     ///
@@ -378,8 +506,9 @@ impl PushService {
         match &current_oid {
             Some(oid) if oid == &ref_update.old_oid => {
                 // Check fast-forward (Requirement 5.2, 5.3)
-                let is_fast_forward =
-                    self.is_fast_forward(tx, repo_id, oid, &ref_update.new_oid, objects).await?;
+                let is_fast_forward = self
+                    .is_fast_forward(tx, repo_id, oid, &ref_update.new_oid, objects)
+                    .await?;
 
                 if !is_fast_forward && !ref_update.force {
                     return Err(PushError::NonFastForward(ref_update.ref_name.clone()));
@@ -552,7 +681,6 @@ impl PushService {
         Ok(objects)
     }
 
-
     /// Parse a single object from packfile data
     fn parse_object(&self, data: &[u8]) -> Result<(GitObject, usize), PushError> {
         if data.is_empty() {
@@ -621,13 +749,12 @@ impl PushService {
         repo_id: &str,
         ref_name: &str,
     ) -> Result<Option<String>, PushError> {
-        let oid: Option<String> = sqlx::query_scalar(
-            "SELECT oid FROM repo_refs WHERE repo_id = $1 AND ref_name = $2",
-        )
-        .bind(repo_id)
-        .bind(ref_name)
-        .fetch_optional(&mut **tx)
-        .await?;
+        let oid: Option<String> =
+            sqlx::query_scalar("SELECT oid FROM repo_refs WHERE repo_id = $1 AND ref_name = $2")
+                .bind(repo_id)
+                .bind(ref_name)
+                .fetch_optional(&mut **tx)
+                .await?;
 
         Ok(oid)
     }
@@ -693,6 +820,222 @@ impl PushService {
             .await?;
 
         Ok(())
+    }
+
+    /// Store objects in S3 with appropriate strategy
+    ///
+    /// Requirements: 4.1, 4.2, 4.3, 4.4, 4.5, 4.6
+    /// Design Reference: DR-S3-4.1
+    ///
+    /// Storage strategy:
+    /// - If > 10 objects: store as packfile for efficiency
+    /// - If <= 10 objects: store as loose objects
+    ///
+    /// This method stores objects in S3 BEFORE updating refs in PostgreSQL,
+    /// ensuring atomic guarantees. If S3 upload fails, refs are not updated.
+    async fn store_objects_in_s3(
+        &self,
+        storage: &dyn ObjectStorageBackend,
+        repo_id: &str,
+        objects: &[GitObject],
+        packfile: &[u8],
+    ) -> Result<S3StorageDetails, PushError> {
+        let object_count = objects.len();
+
+        debug!(
+            repo_id = repo_id,
+            object_count = object_count,
+            threshold = PACKFILE_THRESHOLD,
+            "Storing objects in S3"
+        );
+
+        if object_count > PACKFILE_THRESHOLD {
+            // Store as packfile for efficiency (Requirement 4.2)
+            info!(
+                repo_id = repo_id,
+                object_count = object_count,
+                "Storing {} objects as packfile (threshold: {})",
+                object_count,
+                PACKFILE_THRESHOLD
+            );
+
+            // Compute pack hash from packfile content
+            let pack_hash = hex::encode(Sha256::digest(packfile));
+
+            // Generate packfile index (Requirement 4.6)
+            let index = self.generate_packfile_index(objects, packfile)?;
+
+            // Store packfile and index in S3
+            storage
+                .put_packfile(repo_id, &pack_hash, packfile, &index)
+                .await
+                .map_err(|e| {
+                    error!(
+                        repo_id = repo_id,
+                        pack_hash = %pack_hash,
+                        error = %e,
+                        "Failed to store packfile in S3"
+                    );
+                    PushError::StorageError(format!("Failed to store packfile: {}", e))
+                })?;
+
+            info!(
+                repo_id = repo_id,
+                pack_hash = %pack_hash,
+                object_count = object_count,
+                "Packfile stored successfully in S3"
+            );
+
+            Ok(S3StorageDetails {
+                storage_type: "packfile".to_string(),
+                pack_hash: Some(pack_hash),
+                objects_stored: object_count,
+            })
+        } else {
+            // Store as loose objects (Requirement 4.3)
+            info!(
+                repo_id = repo_id,
+                object_count = object_count,
+                "Storing {} objects as loose objects (threshold: {})",
+                object_count,
+                PACKFILE_THRESHOLD
+            );
+
+            for object in objects {
+                let storage_type = Self::convert_object_type(object.object_type);
+
+                storage
+                    .put_object(repo_id, &object.oid, storage_type, &object.data)
+                    .await
+                    .map_err(|e| {
+                        error!(
+                            repo_id = repo_id,
+                            oid = %object.oid,
+                            error = %e,
+                            "Failed to store loose object in S3"
+                        );
+                        PushError::StorageError(format!(
+                            "Failed to store object {}: {}",
+                            object.oid, e
+                        ))
+                    })?;
+
+                debug!(
+                    repo_id = repo_id,
+                    oid = %object.oid,
+                    object_type = ?object.object_type,
+                    "Loose object stored in S3"
+                );
+            }
+
+            info!(
+                repo_id = repo_id,
+                object_count = object_count,
+                "All loose objects stored successfully in S3"
+            );
+
+            Ok(S3StorageDetails {
+                storage_type: "loose".to_string(),
+                pack_hash: None,
+                objects_stored: object_count,
+            })
+        }
+    }
+
+    /// Convert push GitObjectType to storage GitObjectType
+    fn convert_object_type(obj_type: GitObjectType) -> StorageGitObjectType {
+        match obj_type {
+            GitObjectType::Commit => StorageGitObjectType::Commit,
+            GitObjectType::Tree => StorageGitObjectType::Tree,
+            GitObjectType::Blob => StorageGitObjectType::Blob,
+            GitObjectType::Tag => StorageGitObjectType::Tag,
+        }
+    }
+
+    /// Generate a packfile index (.idx) for the given objects
+    ///
+    /// Requirements: 4.6
+    ///
+    /// The index enables random access to objects within the packfile.
+    /// Format: Git packfile index version 2
+    fn generate_packfile_index(
+        &self,
+        objects: &[GitObject],
+        _packfile: &[u8],
+    ) -> Result<Vec<u8>, PushError> {
+        // Git packfile index v2 format:
+        // - 4 bytes: magic number (0xff744f63)
+        // - 4 bytes: version (2)
+        // - 256 * 4 bytes: fanout table (cumulative count of objects with first byte <= i)
+        // - N * 20 bytes: sorted SHA-1 hashes
+        // - N * 4 bytes: CRC32 checksums
+        // - N * 4 bytes: offsets (or 8 bytes for large packfiles)
+        // - 20 bytes: packfile SHA-1
+        // - 20 bytes: index SHA-1
+
+        let mut index = Vec::new();
+
+        // Magic number for packfile index v2
+        index.extend_from_slice(&[0xff, 0x74, 0x4f, 0x63]);
+
+        // Version 2
+        index.extend_from_slice(&2u32.to_be_bytes());
+
+        // Sort objects by OID for the index
+        let mut sorted_objects: Vec<_> = objects.iter().collect();
+        sorted_objects.sort_by(|a, b| a.oid.cmp(&b.oid));
+
+        // Build fanout table (256 entries)
+        let mut fanout = [0u32; 256];
+        for obj in &sorted_objects {
+            if let Ok(first_byte) = u8::from_str_radix(&obj.oid[0..2], 16) {
+                for i in (first_byte as usize)..256 {
+                    fanout[i] += 1;
+                }
+            }
+        }
+
+        // Write fanout table
+        for count in fanout {
+            index.extend_from_slice(&count.to_be_bytes());
+        }
+
+        // Write sorted SHA-1 hashes (20 bytes each)
+        for obj in &sorted_objects {
+            if let Ok(hash_bytes) = hex::decode(&obj.oid) {
+                index.extend_from_slice(&hash_bytes);
+            } else {
+                // Pad with zeros if decode fails
+                index.extend_from_slice(&[0u8; 20]);
+            }
+        }
+
+        // Write CRC32 checksums (simplified - using 0 for now)
+        for _ in &sorted_objects {
+            index.extend_from_slice(&0u32.to_be_bytes());
+        }
+
+        // Write offsets (simplified - sequential offsets)
+        let mut offset = 12u32; // After PACK header
+        for obj in &sorted_objects {
+            index.extend_from_slice(&offset.to_be_bytes());
+            // Estimate object size in packfile (header + data)
+            offset += (obj.data.len() + 10) as u32;
+        }
+
+        // Packfile SHA-1 (simplified - compute from objects)
+        let mut pack_hasher = Sha1::new();
+        for obj in &sorted_objects {
+            pack_hasher.update(&obj.oid);
+        }
+        let pack_sha1 = pack_hasher.finalize();
+        index.extend_from_slice(&pack_sha1);
+
+        // Index SHA-1
+        let index_sha1 = Sha1::digest(&index);
+        index.extend_from_slice(&index_sha1);
+
+        Ok(index)
     }
 
     /// Store a Git object in the database
@@ -798,13 +1141,12 @@ impl PushService {
         }
 
         // Check explicit repo_access entry
-        let access: Option<AccessRole> = sqlx::query_scalar(
-            "SELECT role FROM repo_access WHERE repo_id = $1 AND agent_id = $2",
-        )
-        .bind(repo_id)
-        .bind(agent_id)
-        .fetch_optional(&self.pool)
-        .await?;
+        let access: Option<AccessRole> =
+            sqlx::query_scalar("SELECT role FROM repo_access WHERE repo_id = $1 AND agent_id = $2")
+                .bind(repo_id)
+                .bind(agent_id)
+                .fetch_optional(&self.pool)
+                .await?;
 
         match access {
             Some(role) => Ok(self.role_satisfies(role, required_role)),
@@ -822,14 +1164,11 @@ impl PushService {
     }
 
     /// Get agent's public key
+    /// Also checks if the agent is suspended (Requirement 2.6)
     async fn get_agent_public_key(&self, agent_id: &str) -> Result<String, PushError> {
-        let public_key: Option<String> =
-            sqlx::query_scalar("SELECT public_key FROM agents WHERE agent_id = $1")
-                .bind(agent_id)
-                .fetch_optional(&self.pool)
-                .await?;
-
-        public_key.ok_or_else(|| PushError::AgentNotFound(agent_id.to_string()))
+        get_agent_public_key_if_not_suspended(&self.pool, agent_id)
+            .await
+            .map_err(PushError::from)
     }
 }
 
@@ -917,8 +1256,8 @@ impl serde::Serialize for RefUpdateStatus {
 #[cfg(test)]
 mod integration_tests {
     use super::*;
-    use base64::engine::general_purpose::STANDARD;
     use base64::Engine;
+    use base64::engine::general_purpose::STANDARD;
     use ed25519_dalek::{Signer, SigningKey};
     use rand::rngs::OsRng;
     use sha1::Sha1;
@@ -953,7 +1292,9 @@ mod integration_tests {
     /// Sign an envelope with Ed25519
     fn sign_envelope(signing_key: &SigningKey, envelope: &SignatureEnvelope) -> String {
         let validator = SignatureValidator::default();
-        let canonical = validator.canonicalize(envelope).expect("canonicalize failed");
+        let canonical = validator
+            .canonicalize(envelope)
+            .expect("canonicalize failed");
         let message_hash = Sha256::digest(canonical.as_bytes());
         let signature = signing_key.sign(&message_hash);
         STANDARD.encode(signature.to_bytes())
@@ -1058,9 +1399,19 @@ mod integration_tests {
     }
 
     /// Create a minimal valid packfile for testing
+    /// 
+    /// This creates a simplified packfile without zlib compression.
+    /// The packfile format is:
+    /// - 4 bytes: "PACK" signature
+    /// - 4 bytes: version (2)
+    /// - 4 bytes: object count
+    /// - For each object:
+    ///   - Variable-length header: type (3 bits) + size (variable)
+    ///   - Object data (uncompressed for testing)
+    /// - 20 bytes: SHA1 checksum
     fn create_test_packfile(objects: &[(GitObjectType, &[u8])]) -> Vec<u8> {
         let mut packfile = Vec::new();
-        
+
         // PACK header
         packfile.extend_from_slice(b"PACK");
         // Version 2
@@ -1068,22 +1419,41 @@ mod integration_tests {
         // Object count
         packfile.extend_from_slice(&(objects.len() as u32).to_be_bytes());
 
-        // Add objects (simplified - no compression)
+        // Add objects with proper variable-length size encoding
         for (obj_type, data) in objects {
-            let type_byte = match obj_type {
-                GitObjectType::Commit => 0x10,
-                GitObjectType::Tree => 0x20,
-                GitObjectType::Blob => 0x30,
-                GitObjectType::Tag => 0x40,
+            let type_bits = match obj_type {
+                GitObjectType::Commit => 1,
+                GitObjectType::Tree => 2,
+                GitObjectType::Blob => 3,
+                GitObjectType::Tag => 4,
             };
-            // Object header: type (3 bits) + size (4 bits)
+            
             let size = data.len();
-            let header_byte = type_byte | ((size & 0x0f) as u8);
-            packfile.push(header_byte);
+            
+            // First byte: MSB=continuation, bits 6-4=type, bits 3-0=size[3:0]
+            let mut first_byte = (type_bits << 4) | ((size & 0x0f) as u8);
+            let mut remaining_size = size >> 4;
+            
+            if remaining_size > 0 {
+                first_byte |= 0x80; // Set continuation bit
+            }
+            packfile.push(first_byte);
+            
+            // Additional size bytes if needed
+            while remaining_size > 0 {
+                let mut byte = (remaining_size & 0x7f) as u8;
+                remaining_size >>= 7;
+                if remaining_size > 0 {
+                    byte |= 0x80; // Set continuation bit
+                }
+                packfile.push(byte);
+            }
+            
+            // Object data (uncompressed for testing)
             packfile.extend_from_slice(data);
         }
 
-        // SHA1 checksum
+        // SHA1 checksum of everything before the checksum
         let checksum = Sha1::digest(&packfile);
         packfile.extend_from_slice(&checksum);
 
@@ -1177,12 +1547,14 @@ mod integration_tests {
 
         let canonical_ref_updates: Vec<serde_json::Value> = ref_updates
             .iter()
-            .map(|r| serde_json::json!({
-                "refName": r.ref_name,
-                "oldOid": r.old_oid,
-                "newOid": r.new_oid,
-                "force": r.force,
-            }))
+            .map(|r| {
+                serde_json::json!({
+                    "refName": r.ref_name,
+                    "oldOid": r.old_oid,
+                    "newOid": r.new_oid,
+                    "force": r.force,
+                })
+            })
             .collect();
 
         let body = serde_json::json!({
@@ -1202,14 +1574,22 @@ mod integration_tests {
         let push_service = PushService::new(pool.clone());
 
         let result = push_service
-            .push(&repo_id, &agent_id, &signature, envelope.timestamp, &nonce, &packfile, ref_updates)
+            .push(
+                &repo_id,
+                &agent_id,
+                &signature,
+                envelope.timestamp,
+                &nonce,
+                &packfile,
+                ref_updates,
+            )
             .await;
 
         cleanup_test_data(&pool, &agent_id, &repo_id, &nonce).await;
 
         assert!(result.is_ok(), "Push should succeed: {:?}", result);
         let response = result.unwrap();
-        assert_eq!(response.status, "ok");
+        assert_eq!(response.status, "ok", "Push status should be ok, ref_updates: {:?}", response.ref_updates);
         assert_eq!(response.ref_updates.len(), 1);
         assert_eq!(response.ref_updates[0].status, "ok");
     }
@@ -1251,12 +1631,14 @@ mod integration_tests {
 
         let canonical_ref_updates: Vec<serde_json::Value> = ref_updates
             .iter()
-            .map(|r| serde_json::json!({
-                "refName": r.ref_name,
-                "oldOid": r.old_oid,
-                "newOid": r.new_oid,
-                "force": r.force,
-            }))
+            .map(|r| {
+                serde_json::json!({
+                    "refName": r.ref_name,
+                    "oldOid": r.old_oid,
+                    "newOid": r.new_oid,
+                    "force": r.force,
+                })
+            })
             .collect();
 
         let body = serde_json::json!({
@@ -1276,13 +1658,25 @@ mod integration_tests {
         let push_service = PushService::new(pool.clone());
 
         let result = push_service
-            .push(&repo_id, &agent_id, &signature, envelope.timestamp, &nonce, &packfile, ref_updates)
+            .push(
+                &repo_id,
+                &agent_id,
+                &signature,
+                envelope.timestamp,
+                &nonce,
+                &packfile,
+                ref_updates,
+            )
             .await;
 
         cleanup_test_data(&pool, &agent_id, &repo_id, &nonce).await;
         cleanup_test_data(&pool, &owner_id, &repo_id, "").await;
 
-        assert!(matches!(result, Err(PushError::AccessDenied(_))), "Push should fail with AccessDenied: {:?}", result);
+        assert!(
+            matches!(result, Err(PushError::AccessDenied(_))),
+            "Push should fail with AccessDenied: {:?}",
+            result
+        );
     }
 
     // =========================================================================
@@ -1324,12 +1718,14 @@ mod integration_tests {
 
         let canonical_ref_updates: Vec<serde_json::Value> = ref_updates
             .iter()
-            .map(|r| serde_json::json!({
-                "refName": r.ref_name,
-                "oldOid": r.old_oid,
-                "newOid": r.new_oid,
-                "force": r.force,
-            }))
+            .map(|r| {
+                serde_json::json!({
+                    "refName": r.ref_name,
+                    "oldOid": r.old_oid,
+                    "newOid": r.new_oid,
+                    "force": r.force,
+                })
+            })
             .collect();
 
         let body = serde_json::json!({
@@ -1349,7 +1745,15 @@ mod integration_tests {
         let push_service = PushService::new(pool.clone());
 
         let result = push_service
-            .push(&repo_id, &agent_id, &signature, envelope.timestamp, &nonce, &packfile, ref_updates)
+            .push(
+                &repo_id,
+                &agent_id,
+                &signature,
+                envelope.timestamp,
+                &nonce,
+                &packfile,
+                ref_updates,
+            )
             .await;
 
         cleanup_test_data(&pool, &agent_id, &repo_id, &nonce).await;
@@ -1399,12 +1803,14 @@ mod integration_tests {
 
         let canonical_ref_updates: Vec<serde_json::Value> = ref_updates
             .iter()
-            .map(|r| serde_json::json!({
-                "refName": r.ref_name,
-                "oldOid": r.old_oid,
-                "newOid": r.new_oid,
-                "force": r.force,
-            }))
+            .map(|r| {
+                serde_json::json!({
+                    "refName": r.ref_name,
+                    "oldOid": r.old_oid,
+                    "newOid": r.new_oid,
+                    "force": r.force,
+                })
+            })
             .collect();
 
         let body = serde_json::json!({
@@ -1424,7 +1830,15 @@ mod integration_tests {
         let push_service = PushService::new(pool.clone());
 
         let result = push_service
-            .push(&repo_id, &agent_id, &signature, envelope.timestamp, &nonce, &packfile, ref_updates)
+            .push(
+                &repo_id,
+                &agent_id,
+                &signature,
+                envelope.timestamp,
+                &nonce,
+                &packfile,
+                ref_updates,
+            )
             .await;
 
         cleanup_test_data(&pool, &agent_id, &repo_id, &nonce).await;
@@ -1432,7 +1846,12 @@ mod integration_tests {
         assert!(result.is_ok(), "Force push should succeed: {:?}", result);
         let response = result.unwrap();
         assert_eq!(response.status, "ok");
-        assert!(response.ref_updates[0].message.as_ref().map_or(false, |m| m.contains("forced")));
+        assert!(
+            response.ref_updates[0]
+                .message
+                .as_ref()
+                .map_or(false, |m| m.contains("forced"))
+        );
     }
 
     // =========================================================================
@@ -1472,12 +1891,14 @@ mod integration_tests {
 
         let canonical_ref_updates: Vec<serde_json::Value> = ref_updates
             .iter()
-            .map(|r| serde_json::json!({
-                "refName": r.ref_name,
-                "oldOid": r.old_oid,
-                "newOid": r.new_oid,
-                "force": r.force,
-            }))
+            .map(|r| {
+                serde_json::json!({
+                    "refName": r.ref_name,
+                    "oldOid": r.old_oid,
+                    "newOid": r.new_oid,
+                    "force": r.force,
+                })
+            })
             .collect();
 
         let body = serde_json::json!({
@@ -1497,12 +1918,24 @@ mod integration_tests {
         let push_service = PushService::new(pool.clone());
 
         let result = push_service
-            .push(&repo_id, &agent_id, &signature, envelope.timestamp, &nonce, &invalid_packfile, ref_updates)
+            .push(
+                &repo_id,
+                &agent_id,
+                &signature,
+                envelope.timestamp,
+                &nonce,
+                &invalid_packfile,
+                ref_updates,
+            )
             .await;
 
         cleanup_test_data(&pool, &agent_id, &repo_id, &nonce).await;
 
-        assert!(matches!(result, Err(PushError::InvalidPackfile(_))), "Invalid packfile should be rejected: {:?}", result);
+        assert!(
+            matches!(result, Err(PushError::InvalidPackfile(_))),
+            "Invalid packfile should be rejected: {:?}",
+            result
+        );
     }
 
     // =========================================================================
@@ -1553,12 +1986,14 @@ mod integration_tests {
 
         let canonical_ref_updates: Vec<serde_json::Value> = ref_updates
             .iter()
-            .map(|r| serde_json::json!({
-                "refName": r.ref_name,
-                "oldOid": r.old_oid,
-                "newOid": r.new_oid,
-                "force": r.force,
-            }))
+            .map(|r| {
+                serde_json::json!({
+                    "refName": r.ref_name,
+                    "oldOid": r.old_oid,
+                    "newOid": r.new_oid,
+                    "force": r.force,
+                })
+            })
             .collect();
 
         let body = serde_json::json!({
@@ -1578,12 +2013,20 @@ mod integration_tests {
         let push_service = PushService::new(pool.clone());
 
         let result = push_service
-            .push(&repo_id, &agent_id, &signature, envelope.timestamp, &nonce, &packfile, ref_updates)
+            .push(
+                &repo_id,
+                &agent_id,
+                &signature,
+                envelope.timestamp,
+                &nonce,
+                &packfile,
+                ref_updates,
+            )
             .await;
 
         // Verify the feature branch was NOT created (atomic rollback)
         let feature_ref: Option<String> = sqlx::query_scalar(
-            "SELECT oid FROM repo_refs WHERE repo_id = $1 AND ref_name = 'refs/heads/feature'"
+            "SELECT oid FROM repo_refs WHERE repo_id = $1 AND ref_name = 'refs/heads/feature'",
         )
         .bind(&repo_id)
         .fetch_optional(&pool)
@@ -1594,8 +2037,14 @@ mod integration_tests {
 
         assert!(result.is_ok(), "Push should return response: {:?}", result);
         let response = result.unwrap();
-        assert_eq!(response.status, "ng", "Push should fail due to invalid ref update");
-        assert!(feature_ref.is_none(), "Feature branch should not exist due to atomic rollback");
+        assert_eq!(
+            response.status, "ng",
+            "Push should fail due to invalid ref update"
+        );
+        assert!(
+            feature_ref.is_none(),
+            "Feature branch should not exist due to atomic rollback"
+        );
     }
 
     // =========================================================================
@@ -1631,12 +2080,14 @@ mod integration_tests {
 
         let canonical_ref_updates: Vec<serde_json::Value> = ref_updates
             .iter()
-            .map(|r| serde_json::json!({
-                "refName": r.ref_name,
-                "oldOid": r.old_oid,
-                "newOid": r.new_oid,
-                "force": r.force,
-            }))
+            .map(|r| {
+                serde_json::json!({
+                    "refName": r.ref_name,
+                    "oldOid": r.old_oid,
+                    "newOid": r.new_oid,
+                    "force": r.force,
+                })
+            })
             .collect();
 
         let body = serde_json::json!({
@@ -1656,7 +2107,15 @@ mod integration_tests {
         let push_service = PushService::new(pool.clone());
 
         let result = push_service
-            .push(&repo_id, &agent_id, &signature, envelope.timestamp, &nonce, &packfile, ref_updates)
+            .push(
+                &repo_id,
+                &agent_id,
+                &signature,
+                envelope.timestamp,
+                &nonce,
+                &packfile,
+                ref_updates,
+            )
             .await;
 
         // Check audit log

@@ -3,14 +3,14 @@
 //! HTTP handlers for trending repository discovery.
 //! Design Reference: DR-12.1 (Trending Service)
 
-use actix_web::{web, HttpResponse};
+use actix_web::{HttpResponse, web};
 use serde::Serialize;
 
+use crate::AppState;
 use crate::error::AppError;
 use crate::models::{TrendingQuery, TrendingWindow};
-use crate::services::trending::TrendingError;
 use crate::services::TrendingService;
-use crate::AppState;
+use crate::services::trending::TrendingError;
 
 /// Standard API response wrapper
 #[derive(Serialize)]

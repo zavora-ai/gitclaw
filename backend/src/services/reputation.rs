@@ -39,7 +39,6 @@ pub enum ReputationError {
 /// Reputation score bounds
 const MIN_REPUTATION: f64 = 0.0;
 const MAX_REPUTATION: f64 = 1.0;
-const DEFAULT_REPUTATION: f64 = 0.5;
 
 /// Reputation change amounts
 const MERGE_SUCCESS_INCREASE: f64 = 0.02;
@@ -363,8 +362,7 @@ impl ReputationService {
                         error = %e,
                         "Failed to process reputation event"
                     );
-                    if let Err(mark_err) =
-                        outbox.mark_failed(event.outbox_id, &e.to_string()).await
+                    if let Err(mark_err) = outbox.mark_failed(event.outbox_id, &e.to_string()).await
                     {
                         error!(
                             outbox_id = %event.outbox_id,
@@ -416,7 +414,11 @@ impl ReputationService {
                     .await?;
 
                 // Also reward reviewers who approved
-                if let Some(reviewers) = event.data.get("approving_reviewers").and_then(|v| v.as_array()) {
+                if let Some(reviewers) = event
+                    .data
+                    .get("approving_reviewers")
+                    .and_then(|v| v.as_array())
+                {
                     for reviewer in reviewers {
                         if let Some(reviewer_id) = reviewer.as_str() {
                             self.update_reputation(
@@ -442,7 +444,11 @@ impl ReputationService {
                     .await?;
 
                 // Also penalize reviewers who approved the reverted PR
-                if let Some(reviewers) = event.data.get("approving_reviewers").and_then(|v| v.as_array()) {
+                if let Some(reviewers) = event
+                    .data
+                    .get("approving_reviewers")
+                    .and_then(|v| v.as_array())
+                {
                     for reviewer in reviewers {
                         if let Some(reviewer_id) = reviewer.as_str() {
                             self.process_inaccurate_review(reviewer_id, &event.resource_id)
@@ -577,12 +583,12 @@ mod tests {
     fn test_reputation_bounds() {
         // Test clamping logic
         let test_cases: Vec<(f64, f64, f64)> = vec![
-            (0.5, 0.1, 0.6),      // Normal increase
-            (0.5, -0.1, 0.4),     // Normal decrease
-            (0.95, 0.1, 1.0),     // Clamped at max
-            (0.05, -0.1, 0.0),    // Clamped at min
-            (1.0, 0.1, 1.0),      // Already at max
-            (0.0, -0.1, 0.0),     // Already at min
+            (0.5, 0.1, 0.6),   // Normal increase
+            (0.5, -0.1, 0.4),  // Normal decrease
+            (0.95, 0.1, 1.0),  // Clamped at max
+            (0.05, -0.1, 0.0), // Clamped at min
+            (1.0, 0.1, 1.0),   // Already at max
+            (0.0, -0.1, 0.0),  // Already at min
         ];
 
         for (current, delta, expected) in test_cases {
@@ -596,12 +602,30 @@ mod tests {
 
     #[test]
     fn test_reputation_change_reason_as_str() {
-        assert_eq!(ReputationChangeReason::MergeSuccess.as_str(), "merge_success");
-        assert_eq!(ReputationChangeReason::AccurateReview.as_str(), "accurate_review");
-        assert_eq!(ReputationChangeReason::MergeReverted.as_str(), "merge_reverted");
-        assert_eq!(ReputationChangeReason::InaccurateReview.as_str(), "inaccurate_review");
-        assert_eq!(ReputationChangeReason::PolicyViolation.as_str(), "policy_violation");
-        assert_eq!(ReputationChangeReason::ManualAdjustment.as_str(), "manual_adjustment");
+        assert_eq!(
+            ReputationChangeReason::MergeSuccess.as_str(),
+            "merge_success"
+        );
+        assert_eq!(
+            ReputationChangeReason::AccurateReview.as_str(),
+            "accurate_review"
+        );
+        assert_eq!(
+            ReputationChangeReason::MergeReverted.as_str(),
+            "merge_reverted"
+        );
+        assert_eq!(
+            ReputationChangeReason::InaccurateReview.as_str(),
+            "inaccurate_review"
+        );
+        assert_eq!(
+            ReputationChangeReason::PolicyViolation.as_str(),
+            "policy_violation"
+        );
+        assert_eq!(
+            ReputationChangeReason::ManualAdjustment.as_str(),
+            "manual_adjustment"
+        );
     }
 
     #[test]

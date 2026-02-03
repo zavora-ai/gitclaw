@@ -56,6 +56,22 @@ pub enum AuditAction {
     AccessRevoke,
     /// Reputation updated
     ReputationUpdate,
+    /// Admin suspended an agent
+    AdminSuspendAgent,
+    /// Admin unsuspended an agent
+    AdminUnsuspendAgent,
+    /// Admin deleted a repository
+    AdminDeleteRepo,
+    /// Admin logged in
+    AdminLogin,
+    /// Admin logged out
+    AdminLogout,
+    /// Admin reconnected orphaned storage to database
+    AdminReconnectRepo,
+    /// Admin deleted orphaned DB record
+    AdminDeleteOrphanedDb,
+    /// Admin deleted orphaned storage objects
+    AdminDeleteOrphanedStorage,
 }
 
 impl AuditAction {
@@ -77,6 +93,14 @@ impl AuditAction {
             Self::AccessGrant => "access_grant",
             Self::AccessRevoke => "access_revoke",
             Self::ReputationUpdate => "reputation_update",
+            Self::AdminSuspendAgent => "admin_suspend_agent",
+            Self::AdminUnsuspendAgent => "admin_unsuspend_agent",
+            Self::AdminDeleteRepo => "admin_delete_repo",
+            Self::AdminLogin => "admin_login",
+            Self::AdminLogout => "admin_logout",
+            Self::AdminReconnectRepo => "admin_reconnect_repo",
+            Self::AdminDeleteOrphanedDb => "admin_delete_orphaned_db",
+            Self::AdminDeleteOrphanedStorage => "admin_delete_orphaned_storage",
         }
     }
 }
@@ -99,6 +123,8 @@ pub enum ResourceType {
     Star,
     Access,
     Reputation,
+    /// Admin session for login/logout events
+    AdminSession,
 }
 
 impl ResourceType {
@@ -113,6 +139,7 @@ impl ResourceType {
             Self::Star => "star",
             Self::Access => "access",
             Self::Reputation => "reputation",
+            Self::AdminSession => "admin_session",
         }
     }
 }
@@ -454,7 +481,10 @@ impl AuditService {
     }
 
     /// Get a single audit event by ID
-    pub async fn get_by_id(&self, event_id: Uuid) -> Result<Option<RecordedAuditEvent>, AuditError> {
+    pub async fn get_by_id(
+        &self,
+        event_id: Uuid,
+    ) -> Result<Option<RecordedAuditEvent>, AuditError> {
         let row = sqlx::query_as::<_, AuditEventRow>(
             r#"
             SELECT event_id, agent_id, action, resource_type, resource_id, data, timestamp, signature
@@ -557,10 +587,23 @@ mod tests {
     }
 
     #[test]
+    fn test_admin_audit_action_as_str() {
+        assert_eq!(AuditAction::AdminSuspendAgent.as_str(), "admin_suspend_agent");
+        assert_eq!(AuditAction::AdminUnsuspendAgent.as_str(), "admin_unsuspend_agent");
+        assert_eq!(AuditAction::AdminDeleteRepo.as_str(), "admin_delete_repo");
+        assert_eq!(AuditAction::AdminLogin.as_str(), "admin_login");
+        assert_eq!(AuditAction::AdminLogout.as_str(), "admin_logout");
+        assert_eq!(AuditAction::AdminReconnectRepo.as_str(), "admin_reconnect_repo");
+        assert_eq!(AuditAction::AdminDeleteOrphanedDb.as_str(), "admin_delete_orphaned_db");
+        assert_eq!(AuditAction::AdminDeleteOrphanedStorage.as_str(), "admin_delete_orphaned_storage");
+    }
+
+    #[test]
     fn test_resource_type_as_str() {
         assert_eq!(ResourceType::Agent.as_str(), "agent");
         assert_eq!(ResourceType::Repository.as_str(), "repository");
         assert_eq!(ResourceType::Star.as_str(), "star");
+        assert_eq!(ResourceType::AdminSession.as_str(), "admin_session");
     }
 
     #[test]
@@ -579,6 +622,23 @@ mod tests {
         assert_eq!(event.resource_type, "star");
         assert_eq!(event.resource_id, "repo-456");
         assert_eq!(event.signature, "sig-789");
+    }
+
+    #[test]
+    fn test_audit_event_new_admin_action() {
+        let event = AuditEvent::new(
+            "admin-user",
+            AuditAction::AdminSuspendAgent,
+            ResourceType::Agent,
+            "agent-456",
+            serde_json::json!({"reason": "policy violation"}),
+            "admin-sig",
+        );
+
+        assert_eq!(event.agent_id, "admin-user");
+        assert_eq!(event.action, "admin_suspend_agent");
+        assert_eq!(event.resource_type, "agent");
+        assert_eq!(event.resource_id, "agent-456");
     }
 
     #[test]

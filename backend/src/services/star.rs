@@ -13,7 +13,9 @@ use crate::models::{GetStarsResponse, StarRepoBody, StarResponse, StarredByAgent
 use crate::services::audit::{AuditError, AuditEvent, AuditService};
 use crate::services::idempotency::{IdempotencyError, IdempotencyResult, IdempotencyService};
 use crate::services::rate_limiter::{RateLimitError, RateLimiterService};
-use crate::services::signature::{SignatureEnvelope, SignatureError, SignatureValidator};
+use crate::services::signature::{
+    SignatureEnvelope, SignatureError, SignatureValidator, get_agent_public_key_if_not_suspended,
+};
 
 /// Maximum length for star reason
 const MAX_REASON_LENGTH: usize = 500;
@@ -36,8 +38,13 @@ pub enum StarError {
     #[error("Invalid reason: {0}")]
     InvalidReason(String),
 
+    /// Agent is suspended and cannot perform mutating operations
+    /// Requirements: 2.6 - Suspended agents must be rejected with SUSPENDED_AGENT error
+    #[error("Agent is suspended: {0}")]
+    Suspended(String),
+
     #[error("Signature validation failed: {0}")]
-    SignatureError(#[from] SignatureError),
+    SignatureError(SignatureError),
 
     #[error("Idempotency error: {0}")]
     IdempotencyError(#[from] IdempotencyError),
@@ -50,6 +57,20 @@ pub enum StarError {
 
     #[error("Audit error: {0}")]
     Audit(#[from] AuditError),
+}
+
+impl From<SignatureError> for StarError {
+    fn from(err: SignatureError) -> Self {
+        match err {
+            SignatureError::Suspended(msg) => StarError::Suspended(msg),
+            SignatureError::MissingField(msg) if msg.starts_with("Agent not found:") => {
+                // Extract agent_id from the message
+                let agent_id = msg.strip_prefix("Agent not found: ").unwrap_or(&msg);
+                StarError::AgentNotFound(agent_id.to_string())
+            }
+            other => StarError::SignatureError(other),
+        }
+    }
 }
 
 /// Service for managing repository stars
@@ -75,6 +96,7 @@ impl StarService {
     ///
     /// Requirements: 14.1, 14.2, 14.3, 14.4, 14.5, 14.6, 14.7
     /// Design: DR-11.1 (Star Service)
+    #[allow(clippy::too_many_arguments)]
     pub async fn star(
         &self,
         repo_id: &str,
@@ -88,17 +110,23 @@ impl StarService {
         const ACTION: &str = "star";
 
         // Check idempotency first (Requirement 14.7)
-        match self.idempotency_service.check(agent_id, nonce, ACTION).await? {
+        match self
+            .idempotency_service
+            .check(agent_id, nonce, ACTION)
+            .await?
+        {
             IdempotencyResult::Cached(cached) => {
                 let response: StarResponse = serde_json::from_value(cached.response_json)
                     .map_err(|e| StarError::Database(sqlx::Error::Decode(Box::new(e))))?;
                 return Ok(response);
             }
             IdempotencyResult::ReplayAttack { previous_action } => {
-                return Err(StarError::IdempotencyError(IdempotencyError::ReplayAttack {
-                    previous_action,
-                    attempted_action: ACTION.to_string(),
-                }));
+                return Err(StarError::IdempotencyError(
+                    IdempotencyError::ReplayAttack {
+                        previous_action,
+                        attempted_action: ACTION.to_string(),
+                    },
+                ));
             }
             IdempotencyResult::New => {}
         }
@@ -273,17 +301,23 @@ impl StarService {
         const ACTION: &str = "unstar";
 
         // Check idempotency first (Requirement 15.5)
-        match self.idempotency_service.check(agent_id, nonce, ACTION).await? {
+        match self
+            .idempotency_service
+            .check(agent_id, nonce, ACTION)
+            .await?
+        {
             IdempotencyResult::Cached(cached) => {
                 let response: StarResponse = serde_json::from_value(cached.response_json)
                     .map_err(|e| StarError::Database(sqlx::Error::Decode(Box::new(e))))?;
                 return Ok(response);
             }
             IdempotencyResult::ReplayAttack { previous_action } => {
-                return Err(StarError::IdempotencyError(IdempotencyError::ReplayAttack {
-                    previous_action,
-                    attempted_action: ACTION.to_string(),
-                }));
+                return Err(StarError::IdempotencyError(
+                    IdempotencyError::ReplayAttack {
+                        previous_action,
+                        attempted_action: ACTION.to_string(),
+                    },
+                ));
             }
             IdempotencyResult::New => {}
         }
@@ -484,13 +518,10 @@ impl StarService {
     }
 
     /// Get agent's public key for signature validation
+    /// Also checks if the agent is suspended (Requirement 2.6)
     async fn get_agent_public_key(&self, agent_id: &str) -> Result<String, StarError> {
-        let public_key: Option<String> =
-            sqlx::query_scalar("SELECT public_key FROM agents WHERE agent_id = $1")
-                .bind(agent_id)
-                .fetch_optional(&self.pool)
-                .await?;
-
-        public_key.ok_or_else(|| StarError::AgentNotFound(agent_id.to_string()))
+        get_agent_public_key_if_not_suspended(&self.pool, agent_id)
+            .await
+            .map_err(StarError::from)
     }
 }

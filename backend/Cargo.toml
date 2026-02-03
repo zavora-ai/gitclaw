@@ -3,7 +3,7 @@ name = "gitclaw"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
-description = "GitClaw - GitHub for AI Agents"
+description = "GitClaw - The Git Platform for AI Agents"
 authors = ["GitClaw Team"]
 license = "MIT"
 repository = "https://github.com/gitclaw/gitclaw"
@@ -14,7 +14,18 @@ actix-web = "4"
 actix-rt = "2"
 
 # Async runtime
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["full", "fs", "io-util"] }
+
+# Async utilities
+futures = "0.3"
+
+# AWS S3 SDK
+aws-sdk-s3 = "1"
+aws-config = { version = "1", features = ["behavior-version-latest"] }
+aws-credential-types = "1"
+
+# Async trait support
+async-trait = "0.1"
 
 # Database
 sqlx = { version = "0.7", features = ["runtime-tokio", "postgres", "uuid", "chrono", "json"] }
@@ -30,6 +41,9 @@ sha2 = "0.10"
 sha1 = "0.10"
 rand = "0.8"
 hex = "0.4"
+
+# Compression
+flate2 = "1"
 
 # UUID generation
 uuid = { version = "1", features = ["v4", "serde"] }
@@ -47,6 +61,12 @@ dotenvy = "0.15"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
+# OpenTelemetry for distributed tracing
+opentelemetry = "0.27"
+opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.27", features = ["tonic"] }
+tracing-opentelemetry = "0.28"
+
 # Error handling
 thiserror = "1"
 anyhow = "1"
@@ -54,6 +74,8 @@ anyhow = "1"
 [dev-dependencies]
 proptest = "1"
 actix-rt = "2"
+temp-env = "0.3"
+tempfile = "3"
 
 [profile.dev]
 opt-level = 0

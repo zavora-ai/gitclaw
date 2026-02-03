@@ -6,26 +6,26 @@
 
 #[cfg(test)]
 mod http_integration_tests {
-    use actix_web::{test, web, App};
-    use base64::engine::general_purpose::STANDARD;
+    use actix_web::{App, test, web};
     use base64::Engine;
+    use base64::engine::general_purpose::STANDARD;
     use chrono::Utc;
     use ed25519_dalek::{Signer, SigningKey};
     use rand::rngs::OsRng;
     use sha2::{Digest, Sha256};
     use sqlx::PgPool;
 
+    use crate::AppState;
     use crate::config::Config;
     use crate::handlers::configure_star_routes;
-    use crate::services::{RateLimiterService, SignatureValidator};
     use crate::services::signature::SignatureEnvelope;
-    use crate::AppState;
+    use crate::services::{RateLimiterService, SignatureValidator};
 
     /// Helper to create a test database pool - returns None if connection fails
     async fn try_create_test_pool() -> Option<PgPool> {
         let _ = dotenvy::from_filename("backend/.env");
         let _ = dotenvy::dotenv();
-        
+
         let database_url = match std::env::var("DATABASE_URL") {
             Ok(url) => url,
             Err(_) => return None,
@@ -49,7 +49,9 @@ mod http_integration_tests {
     /// Sign an envelope with Ed25519
     fn sign_envelope(signing_key: &SigningKey, envelope: &SignatureEnvelope) -> String {
         let validator = SignatureValidator::default();
-        let canonical = validator.canonicalize(envelope).expect("canonicalize failed");
+        let canonical = validator
+            .canonicalize(envelope)
+            .expect("canonicalize failed");
         let message_hash = Sha256::digest(canonical.as_bytes());
         let signature = signing_key.sign(&message_hash);
         STANDARD.encode(signature.to_bytes())
@@ -228,8 +230,9 @@ mod http_integration_tests {
         let app = test::init_service(
             App::new()
                 .app_data(app_state)
-                .service(web::scope("/v1").configure(configure_star_routes))
-        ).await;
+                .service(web::scope("/v1").configure(configure_star_routes)),
+        )
+        .await;
 
         let body = serde_json::json!({
             "repoId": repo_id,
@@ -270,7 +273,11 @@ mod http_integration_tests {
         cleanup_test_repo(&pool, &repo_id).await;
         cleanup_test_agent(&pool, &agent_id).await;
 
-        assert_eq!(status, 200, "Expected 200 OK, got {}: {:?}", status, response);
+        assert_eq!(
+            status, 200,
+            "Expected 200 OK, got {}: {:?}",
+            status, response
+        );
         assert_eq!(response["data"]["repoId"], repo_id);
         assert_eq!(response["data"]["agentId"], agent_id);
         assert_eq!(response["data"]["action"], "starred");
@@ -303,8 +310,9 @@ mod http_integration_tests {
         let app = test::init_service(
             App::new()
                 .app_data(app_state)
-                .service(web::scope("/v1").configure(configure_star_routes))
-        ).await;
+                .service(web::scope("/v1").configure(configure_star_routes)),
+        )
+        .await;
 
         // First star
         let nonce1 = uuid::Uuid::new_v4().to_string();
@@ -368,11 +376,12 @@ mod http_integration_tests {
         let response2: serde_json::Value = serde_json::from_slice(&body2_bytes).unwrap();
 
         // Verify count in database
-        let db_count: i32 = sqlx::query_scalar("SELECT stars FROM repo_star_counts WHERE repo_id = $1")
-            .bind(&repo_id)
-            .fetch_one(&pool)
-            .await
-            .expect("Query should succeed");
+        let db_count: i32 =
+            sqlx::query_scalar("SELECT stars FROM repo_star_counts WHERE repo_id = $1")
+                .bind(&repo_id)
+                .fetch_one(&pool)
+                .await
+                .expect("Query should succeed");
 
         // Cleanup
         cleanup_idempotency(&pool, &agent1_id, &nonce1).await;
@@ -382,7 +391,10 @@ mod http_integration_tests {
         cleanup_test_agent(&pool, &agent2_id).await;
         cleanup_test_agent(&pool, &owner_id).await;
 
-        assert_eq!(response2["data"]["starCount"], 2, "Star count should be 2 after two stars");
+        assert_eq!(
+            response2["data"]["starCount"], 2,
+            "Star count should be 2 after two stars"
+        );
         assert_eq!(db_count, 2, "Database star count should be 2");
     }
 
@@ -408,8 +420,9 @@ mod http_integration_tests {
         let app = test::init_service(
             App::new()
                 .app_data(app_state)
-                .service(web::scope("/v1").configure(configure_star_routes))
-        ).await;
+                .service(web::scope("/v1").configure(configure_star_routes)),
+        )
+        .await;
 
         // First star
         let nonce1 = uuid::Uuid::new_v4().to_string();
@@ -503,8 +516,9 @@ mod http_integration_tests {
         let app = test::init_service(
             App::new()
                 .app_data(app_state)
-                .service(web::scope("/v1").configure(configure_star_routes))
-        ).await;
+                .service(web::scope("/v1").configure(configure_star_routes)),
+        )
+        .await;
 
         let body = serde_json::json!({
             "repoId": fake_repo_id,
@@ -541,7 +555,6 @@ mod http_integration_tests {
         assert_eq!(status, 404, "Star on non-existent repo should return 404");
     }
 
-
     // =========================================================================
     // Test: Unstar decrements count (floor at 0)
     // Requirements: 15.4
@@ -564,8 +577,9 @@ mod http_integration_tests {
         let app = test::init_service(
             App::new()
                 .app_data(app_state)
-                .service(web::scope("/v1").configure(configure_star_routes))
-        ).await;
+                .service(web::scope("/v1").configure(configure_star_routes)),
+        )
+        .await;
 
         // First star
         let star_nonce = uuid::Uuid::new_v4().to_string();
@@ -624,14 +638,16 @@ mod http_integration_tests {
             .to_request();
         let unstar_resp = test::call_service(&app, unstar_req).await;
         let unstar_body_bytes = test::read_body(unstar_resp).await;
-        let unstar_response: serde_json::Value = serde_json::from_slice(&unstar_body_bytes).unwrap();
+        let unstar_response: serde_json::Value =
+            serde_json::from_slice(&unstar_body_bytes).unwrap();
 
         // Verify count in database
-        let db_count: i32 = sqlx::query_scalar("SELECT stars FROM repo_star_counts WHERE repo_id = $1")
-            .bind(&repo_id)
-            .fetch_one(&pool)
-            .await
-            .expect("Query should succeed");
+        let db_count: i32 =
+            sqlx::query_scalar("SELECT stars FROM repo_star_counts WHERE repo_id = $1")
+                .bind(&repo_id)
+                .fetch_one(&pool)
+                .await
+                .expect("Query should succeed");
 
         // Cleanup
         cleanup_idempotency(&pool, &agent_id, &star_nonce).await;
@@ -639,7 +655,10 @@ mod http_integration_tests {
         cleanup_test_repo(&pool, &repo_id).await;
         cleanup_test_agent(&pool, &agent_id).await;
 
-        assert_eq!(unstar_response["data"]["starCount"], 0, "Star count should be 0 after unstar");
+        assert_eq!(
+            unstar_response["data"]["starCount"], 0,
+            "Star count should be 0 after unstar"
+        );
         assert_eq!(db_count, 0, "Database star count should be 0");
     }
 
@@ -666,8 +685,9 @@ mod http_integration_tests {
         let app = test::init_service(
             App::new()
                 .app_data(app_state)
-                .service(web::scope("/v1").configure(configure_star_routes))
-        ).await;
+                .service(web::scope("/v1").configure(configure_star_routes)),
+        )
+        .await;
 
         let body = serde_json::json!({
             "repoId": repo_id,
@@ -700,7 +720,10 @@ mod http_integration_tests {
         cleanup_test_repo(&pool, &repo_id).await;
         cleanup_test_agent(&pool, &agent_id).await;
 
-        assert_eq!(status, 404, "Unstar without existing star should return 404");
+        assert_eq!(
+            status, 404,
+            "Unstar without existing star should return 404"
+        );
     }
 
     // =========================================================================
@@ -723,18 +746,20 @@ mod http_integration_tests {
         let (agent_id, _public_key, signing_key) = create_test_agent(&pool).await;
 
         // Get initial count
-        let initial_count: i32 = sqlx::query_scalar("SELECT stars FROM repo_star_counts WHERE repo_id = $1")
-            .bind(&repo_id)
-            .fetch_one(&pool)
-            .await
-            .expect("Query should succeed");
+        let initial_count: i32 =
+            sqlx::query_scalar("SELECT stars FROM repo_star_counts WHERE repo_id = $1")
+                .bind(&repo_id)
+                .fetch_one(&pool)
+                .await
+                .expect("Query should succeed");
 
         let app_state = create_test_app_state(pool.clone());
         let app = test::init_service(
             App::new()
                 .app_data(app_state)
-                .service(web::scope("/v1").configure(configure_star_routes))
-        ).await;
+                .service(web::scope("/v1").configure(configure_star_routes)),
+        )
+        .await;
 
         // Star
         let star_nonce = uuid::Uuid::new_v4().to_string();
@@ -795,11 +820,12 @@ mod http_integration_tests {
         assert_eq!(unstar_resp.status(), 200, "Unstar should succeed");
 
         // Verify final count equals initial count
-        let final_count: i32 = sqlx::query_scalar("SELECT stars FROM repo_star_counts WHERE repo_id = $1")
-            .bind(&repo_id)
-            .fetch_one(&pool)
-            .await
-            .expect("Query should succeed");
+        let final_count: i32 =
+            sqlx::query_scalar("SELECT stars FROM repo_star_counts WHERE repo_id = $1")
+                .bind(&repo_id)
+                .fetch_one(&pool)
+                .await
+                .expect("Query should succeed");
 
         // Cleanup
         cleanup_idempotency(&pool, &agent_id, &star_nonce).await;
@@ -808,7 +834,10 @@ mod http_integration_tests {
         cleanup_test_agent(&pool, &agent_id).await;
         cleanup_test_agent(&pool, &owner_id).await;
 
-        assert_eq!(final_count, initial_count, "Star/unstar round-trip should preserve original count");
+        assert_eq!(
+            final_count, initial_count,
+            "Star/unstar round-trip should preserve original count"
+        );
     }
 
     // =========================================================================
@@ -834,8 +863,9 @@ mod http_integration_tests {
         let app = test::init_service(
             App::new()
                 .app_data(app_state)
-                .service(web::scope("/v1").configure(configure_star_routes))
-        ).await;
+                .service(web::scope("/v1").configure(configure_star_routes)),
+        )
+        .await;
 
         let body = serde_json::json!({
             "repoId": repo_id,
@@ -881,11 +911,12 @@ mod http_integration_tests {
         let response2: serde_json::Value = serde_json::from_slice(&body2_bytes).unwrap();
 
         // Verify star count is still 1 (not 2)
-        let db_count: i32 = sqlx::query_scalar("SELECT stars FROM repo_star_counts WHERE repo_id = $1")
-            .bind(&repo_id)
-            .fetch_one(&pool)
-            .await
-            .expect("Query should succeed");
+        let db_count: i32 =
+            sqlx::query_scalar("SELECT stars FROM repo_star_counts WHERE repo_id = $1")
+                .bind(&repo_id)
+                .fetch_one(&pool)
+                .await
+                .expect("Query should succeed");
 
         // Cleanup
         cleanup_idempotency(&pool, &agent_id, &nonce).await;
@@ -893,8 +924,14 @@ mod http_integration_tests {
         cleanup_test_agent(&pool, &agent_id).await;
 
         assert_eq!(status2, 200, "Idempotent retry should return 200");
-        assert_eq!(response1["data"]["starCount"], response2["data"]["starCount"], "Cached response should match original");
-        assert_eq!(db_count, 1, "Star count should be 1 (not incremented twice)");
+        assert_eq!(
+            response1["data"]["starCount"], response2["data"]["starCount"],
+            "Cached response should match original"
+        );
+        assert_eq!(
+            db_count, 1,
+            "Star count should be 1 (not incremented twice)"
+        );
     }
 
     // =========================================================================
@@ -920,8 +957,9 @@ mod http_integration_tests {
         let app = test::init_service(
             App::new()
                 .app_data(app_state)
-                .service(web::scope("/v1").configure(configure_star_routes))
-        ).await;
+                .service(web::scope("/v1").configure(configure_star_routes)),
+        )
+        .await;
 
         // Star the repo
         let nonce = uuid::Uuid::new_v4().to_string();
@@ -973,11 +1011,16 @@ mod http_integration_tests {
         assert_eq!(get_status, 200, "GET stars should succeed");
         assert_eq!(get_response["data"]["repoId"], repo_id);
         assert_eq!(get_response["data"]["starCount"], 1);
-        assert!(get_response["data"]["starredBy"].is_array(), "starredBy should be an array");
-        assert_eq!(get_response["data"]["starredBy"].as_array().unwrap().len(), 1);
+        assert!(
+            get_response["data"]["starredBy"].is_array(),
+            "starredBy should be an array"
+        );
+        assert_eq!(
+            get_response["data"]["starredBy"].as_array().unwrap().len(),
+            1
+        );
         assert_eq!(get_response["data"]["starredBy"][0]["agentId"], agent_id);
     }
-
 
     // =========================================================================
     // Test: starredBy sorted by timestamp descending
@@ -1005,8 +1048,9 @@ mod http_integration_tests {
         let app = test::init_service(
             App::new()
                 .app_data(app_state)
-                .service(web::scope("/v1").configure(configure_star_routes))
-        ).await;
+                .service(web::scope("/v1").configure(configure_star_routes)),
+        )
+        .await;
 
         // First agent stars
         let nonce1 = uuid::Uuid::new_v4().to_string();
@@ -1090,8 +1134,14 @@ mod http_integration_tests {
         let starred_by = get_response["data"]["starredBy"].as_array().unwrap();
         assert_eq!(starred_by.len(), 2, "Should have 2 stars");
         // Most recent (agent2) should be first
-        assert_eq!(starred_by[0]["agentId"], agent2_id, "Most recent star should be first");
-        assert_eq!(starred_by[1]["agentId"], agent1_id, "Older star should be second");
+        assert_eq!(
+            starred_by[0]["agentId"], agent2_id,
+            "Most recent star should be first"
+        );
+        assert_eq!(
+            starred_by[1]["agentId"], agent1_id,
+            "Older star should be second"
+        );
     }
 
     // =========================================================================
@@ -1120,8 +1170,9 @@ mod http_integration_tests {
         let app = test::init_service(
             App::new()
                 .app_data(app_state)
-                .service(web::scope("/v1").configure(configure_star_routes))
-        ).await;
+                .service(web::scope("/v1").configure(configure_star_routes)),
+        )
+        .await;
 
         // First agent stars with PUBLIC reason
         let nonce1 = uuid::Uuid::new_v4().to_string();
@@ -1207,11 +1258,23 @@ mod http_integration_tests {
         assert_eq!(starred_by.len(), 2, "Should have 2 stars");
 
         // Find the entries by agent_id
-        let agent1_entry = starred_by.iter().find(|e| e["agentId"] == agent1_id).unwrap();
-        let agent2_entry = starred_by.iter().find(|e| e["agentId"] == agent2_id).unwrap();
+        let agent1_entry = starred_by
+            .iter()
+            .find(|e| e["agentId"] == agent1_id)
+            .unwrap();
+        let agent2_entry = starred_by
+            .iter()
+            .find(|e| e["agentId"] == agent2_id)
+            .unwrap();
 
-        assert_eq!(agent1_entry["reason"], "Public reason", "Public reason should be visible");
-        assert!(agent2_entry["reason"].is_null(), "Private reason should be null");
+        assert_eq!(
+            agent1_entry["reason"], "Public reason",
+            "Public reason should be visible"
+        );
+        assert!(
+            agent2_entry["reason"].is_null(),
+            "Private reason should be null"
+        );
     }
 
     // =========================================================================
@@ -1236,8 +1299,9 @@ mod http_integration_tests {
         let app = test::init_service(
             App::new()
                 .app_data(app_state)
-                .service(web::scope("/v1").configure(configure_star_routes))
-        ).await;
+                .service(web::scope("/v1").configure(configure_star_routes)),
+        )
+        .await;
 
         // Star
         let star_nonce = uuid::Uuid::new_v4().to_string();
@@ -1332,6 +1396,9 @@ mod http_integration_tests {
         cleanup_test_repo(&pool, &repo_id).await;
         cleanup_test_agent(&pool, &agent_id).await;
 
-        assert!(unstar_audit.is_some(), "Unstar audit event should be recorded");
+        assert!(
+            unstar_audit.is_some(),
+            "Unstar audit event should be recorded"
+        );
     }
 }

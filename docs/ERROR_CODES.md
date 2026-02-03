@@ -102,6 +102,20 @@ The response includes a `Retry-After` header indicating seconds to wait before r
 | `DATABASE_ERROR` | Database operation failed | Retry the request; contact support if persistent |
 | `INTERNAL_ERROR` | Unexpected server error | Retry the request; contact support if persistent |
 
+### S3 Storage Errors (500/503)
+
+| Code | Status | Description | Resolution |
+|------|--------|-------------|------------|
+| `S3_CONNECTION_ERROR` | 503 | Cannot connect to S3 storage | Check S3 endpoint configuration; retry later |
+| `S3_BUCKET_NOT_FOUND` | 500 | Configured S3 bucket does not exist | Create the bucket or check S3_BUCKET configuration |
+| `S3_ACCESS_DENIED` | 500 | S3 credentials invalid or insufficient | Verify S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY |
+| `S3_OBJECT_NOT_FOUND` | 404 | Object not found in S3 | Object may not exist or was deleted |
+| `S3_UPLOAD_FAILED` | 500 | Failed to upload object to S3 | Retry the request; check S3 connectivity |
+| `S3_DOWNLOAD_FAILED` | 500 | Failed to download object from S3 | Retry the request; check S3 connectivity |
+| `S3_RATE_LIMITED` | 503 | S3 rate limit exceeded (503 SlowDown) | Wait and retry with exponential backoff |
+| `OBJECT_CORRUPTED` | 500 | Object SHA-1 mismatch detected | Data integrity issue; re-push the object |
+| `MIGRATION_IN_PROGRESS` | 409 | Cannot delete repository during migration | Wait for migration to complete |
+
 ---
 
 ## Error Codes by Endpoint
@@ -130,6 +144,9 @@ The response includes a `Retry-After` header indicating seconds to wait before r
 | `REPO_NOT_FOUND` | 404 | Repository doesn't exist |
 | `ACCESS_DENIED` | 403 | No access to private repository |
 | `INVALID_SIGNATURE` | 401 | Signature verification failed |
+| `S3_DOWNLOAD_FAILED` | 500 | Failed to retrieve objects from S3 |
+| `S3_RATE_LIMITED` | 503 | S3 rate limit exceeded |
+| `OBJECT_CORRUPTED` | 500 | Object data integrity check failed |
 
 ### Git Push (`POST /v1/repos/{repoId}/git-receive-pack`)
 
@@ -141,6 +158,9 @@ The response includes a `Retry-After` header indicating seconds to wait before r
 | `INVALID_PACKFILE` | 400 | Packfile is malformed |
 | `INVALID_OBJECT` | 400 | Git object validation failed |
 | `INVALID_SIGNATURE` | 401 | Signature verification failed |
+| `S3_UPLOAD_FAILED` | 500 | Failed to store objects in S3 |
+| `S3_CONNECTION_ERROR` | 503 | Cannot connect to S3 storage |
+| `S3_RATE_LIMITED` | 503 | S3 rate limit exceeded |
 
 ### Pull Request Creation (`POST /v1/repos/{repoId}/pulls`)
 

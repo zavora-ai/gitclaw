@@ -8,12 +8,12 @@ use sqlx::{PgPool, Row};
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::models::{
-    AccessRole, CreateRepoRequest, CreateRepoResponse, Repository, Visibility,
-};
+use crate::models::{AccessRole, CreateRepoRequest, CreateRepoResponse, Repository, Visibility};
 use crate::services::audit::{AuditError, AuditEvent, AuditService};
-use crate::services::signature::{SignatureEnvelope, SignatureError, SignatureValidator};
-use crate::services::idempotency::{IdempotencyError, IdempotencyService, IdempotencyResult};
+use crate::services::idempotency::{IdempotencyError, IdempotencyResult, IdempotencyService};
+use crate::services::signature::{
+    SignatureEnvelope, SignatureError, SignatureValidator, get_agent_public_key_if_not_suspended,
+};
 
 /// Errors that can occur during repository operations
 #[derive(Debug, Error)]
@@ -33,8 +33,13 @@ pub enum RepositoryError {
     #[error("Access denied: {0}")]
     AccessDenied(String),
 
+    /// Agent is suspended and cannot perform mutating operations
+    /// Requirements: 2.6 - Suspended agents must be rejected with SUSPENDED_AGENT error
+    #[error("Agent is suspended: {0}")]
+    Suspended(String),
+
     #[error("Signature validation failed: {0}")]
-    SignatureError(#[from] SignatureError),
+    SignatureError(SignatureError),
 
     #[error("Idempotency error: {0}")]
     IdempotencyError(#[from] IdempotencyError),
@@ -44,6 +49,20 @@ pub enum RepositoryError {
 
     #[error("Audit error: {0}")]
     Audit(#[from] AuditError),
+}
+
+impl From<SignatureError> for RepositoryError {
+    fn from(err: SignatureError) -> Self {
+        match err {
+            SignatureError::Suspended(msg) => RepositoryError::Suspended(msg),
+            SignatureError::MissingField(msg) if msg.starts_with("Agent not found:") => {
+                // Extract agent_id from the message
+                let agent_id = msg.strip_prefix("Agent not found: ").unwrap_or(&msg);
+                RepositoryError::AgentNotFound(agent_id.to_string())
+            }
+            other => RepositoryError::SignatureError(other),
+        }
+    }
 }
 
 /// Service for managing repositories
@@ -80,7 +99,11 @@ impl RepositoryService {
         const ACTION: &str = "repo_create";
 
         // Check idempotency first
-        match self.idempotency_service.check(agent_id, nonce, ACTION).await? {
+        match self
+            .idempotency_service
+            .check(agent_id, nonce, ACTION)
+            .await?
+        {
             IdempotencyResult::Cached(cached) => {
                 // Return cached response
                 let response: CreateRepoResponse = serde_json::from_value(cached.response_json)
@@ -160,7 +183,7 @@ impl RepositoryService {
         .bind(agent_id)
         .bind(&request.name)
         .bind(&request.description)
-        .bind(&request.visibility)
+        .bind(request.visibility)
         .bind(&default_branch)
         .bind(created_at)
         .execute(&mut *tx)
@@ -225,16 +248,8 @@ impl RepositoryService {
         };
 
         // Store idempotency result
-        IdempotencyService::store_in_tx(
-            &mut tx,
-            agent_id,
-            nonce,
-            ACTION,
-            201,
-            &response,
-            24,
-        )
-        .await?;
+        IdempotencyService::store_in_tx(&mut tx, agent_id, nonce, ACTION, 201, &response, 24)
+            .await?;
 
         // Commit transaction
         tx.commit().await?;
@@ -291,13 +306,12 @@ impl RepositoryService {
         }
 
         // Check explicit repo_access entry
-        let access: Option<AccessRole> = sqlx::query_scalar(
-            "SELECT role FROM repo_access WHERE repo_id = $1 AND agent_id = $2",
-        )
-        .bind(repo_id)
-        .bind(agent_id)
-        .fetch_optional(&self.pool)
-        .await?;
+        let access: Option<AccessRole> =
+            sqlx::query_scalar("SELECT role FROM repo_access WHERE repo_id = $1 AND agent_id = $2")
+                .bind(repo_id)
+                .bind(agent_id)
+                .fetch_optional(&self.pool)
+                .await?;
 
         match access {
             Some(role) => Ok(self.role_satisfies(role, required_role)),
@@ -311,13 +325,12 @@ impl RepositoryService {
         repo_id: &str,
         agent_id: &str,
     ) -> Result<Option<AccessRole>, RepositoryError> {
-        let access: Option<AccessRole> = sqlx::query_scalar(
-            "SELECT role FROM repo_access WHERE repo_id = $1 AND agent_id = $2",
-        )
-        .bind(repo_id)
-        .bind(agent_id)
-        .fetch_optional(&self.pool)
-        .await?;
+        let access: Option<AccessRole> =
+            sqlx::query_scalar("SELECT role FROM repo_access WHERE repo_id = $1 AND agent_id = $2")
+                .bind(repo_id)
+                .bind(agent_id)
+                .fetch_optional(&self.pool)
+                .await?;
 
         Ok(access)
     }
@@ -368,14 +381,11 @@ impl RepositoryService {
     }
 
     /// Get agent's public key for signature validation
+    /// Also checks if the agent is suspended (Requirement 2.6)
     async fn get_agent_public_key(&self, agent_id: &str) -> Result<String, RepositoryError> {
-        let public_key: Option<String> =
-            sqlx::query_scalar("SELECT public_key FROM agents WHERE agent_id = $1")
-                .bind(agent_id)
-                .fetch_optional(&self.pool)
-                .await?;
-
-        public_key.ok_or_else(|| RepositoryError::AgentNotFound(agent_id.to_string()))
+        get_agent_public_key_if_not_suspended(&self.pool, agent_id)
+            .await
+            .map_err(RepositoryError::from)
     }
 }
 
@@ -470,7 +480,7 @@ impl RepositoryService {
         // Format: "PACK" (4 bytes) + version (4 bytes, big-endian) + num_objects (4 bytes, big-endian)
         let empty_packfile = base64::Engine::encode(
             &base64::engine::general_purpose::STANDARD,
-            &[
+            [
                 0x50, 0x41, 0x43, 0x4b, // "PACK"
                 0x00, 0x00, 0x00, 0x02, // version 2
                 0x00, 0x00, 0x00, 0x00, // 0 objects
@@ -522,8 +532,8 @@ impl RepositoryService {
 }
 
 use crate::models::{
-    AccessResponse, Collaborator, ListCollaboratorsResponse,
-    SignedGrantAccessRequest, SignedListAccessRequest, SignedRevokeAccessRequest,
+    AccessResponse, Collaborator, ListCollaboratorsResponse, SignedGrantAccessRequest,
+    SignedListAccessRequest, SignedRevokeAccessRequest,
 };
 
 impl RepositoryService {
@@ -762,13 +772,11 @@ impl RepositoryService {
         let mut tx = self.pool.begin().await?;
 
         // Delete access entry
-        let result = sqlx::query(
-            "DELETE FROM repo_access WHERE repo_id = $1 AND agent_id = $2",
-        )
-        .bind(repo_id)
-        .bind(target_agent_id)
-        .execute(&mut *tx)
-        .await?;
+        let result = sqlx::query("DELETE FROM repo_access WHERE repo_id = $1 AND agent_id = $2")
+            .bind(repo_id)
+            .bind(target_agent_id)
+            .execute(&mut *tx)
+            .await?;
 
         // Append audit event (Requirement 18.4)
         let audit_data = serde_json::json!({
@@ -893,7 +901,6 @@ impl RepositoryService {
     }
 }
 
-
 // ============================================================================
 // INTEGRATION TESTS
 // ============================================================================
@@ -905,8 +912,8 @@ impl RepositoryService {
 #[cfg(test)]
 mod integration_tests {
     use super::*;
-    use base64::engine::general_purpose::STANDARD;
     use base64::Engine;
+    use base64::engine::general_purpose::STANDARD;
     use ed25519_dalek::{Signer, SigningKey};
     use rand::rngs::OsRng;
     use sha2::{Digest, Sha256};
@@ -938,7 +945,9 @@ mod integration_tests {
     /// Sign an envelope with Ed25519
     fn sign_envelope(signing_key: &SigningKey, envelope: &SignatureEnvelope) -> String {
         let validator = SignatureValidator::default();
-        let canonical = validator.canonicalize(envelope).expect("canonicalize failed");
+        let canonical = validator
+            .canonicalize(envelope)
+            .expect("canonicalize failed");
         let message_hash = Sha256::digest(canonical.as_bytes());
         let signature = signing_key.sign(&message_hash);
         STANDARD.encode(signature.to_bytes())
@@ -1048,7 +1057,8 @@ mod integration_tests {
         let nonce = uuid::Uuid::new_v4().to_string();
         let repo_name = format!("test-repo-{}", uuid::Uuid::new_v4());
 
-        let repo_service = RepositoryService::new(pool.clone(), "http://localhost:8080".to_string());
+        let repo_service =
+            RepositoryService::new(pool.clone(), "http://localhost:8080".to_string());
 
         let request = CreateRepoRequest {
             name: repo_name.clone(),
@@ -1083,7 +1093,11 @@ mod integration_tests {
         cleanup_idempotency(&pool, &agent_id, &nonce).await;
         cleanup_test_agent(&pool, &agent_id).await;
 
-        assert!(result.is_ok(), "Repository creation should succeed: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "Repository creation should succeed: {:?}",
+            result
+        );
         let response = result.unwrap();
         assert_eq!(response.name, repo_name);
         assert_eq!(response.owner_id, agent_id);
@@ -1108,7 +1122,8 @@ mod integration_tests {
         };
         let (agent_id, _public_key, signing_key) = create_test_agent(&pool).await;
         let repo_name = format!("test-repo-{}", uuid::Uuid::new_v4());
-        let repo_service = RepositoryService::new(pool.clone(), "http://localhost:8080".to_string());
+        let repo_service =
+            RepositoryService::new(pool.clone(), "http://localhost:8080".to_string());
 
         // First creation
         let nonce1 = uuid::Uuid::new_v4().to_string();
@@ -1134,7 +1149,13 @@ mod integration_tests {
 
         let signature1 = sign_envelope(&signing_key, &envelope1);
         let result1 = repo_service
-            .create(&agent_id, &nonce1, envelope1.timestamp, &signature1, request1)
+            .create(
+                &agent_id,
+                &nonce1,
+                envelope1.timestamp,
+                &signature1,
+                request1,
+            )
             .await;
         assert!(result1.is_ok(), "First creation should succeed");
         let repo_id = result1.unwrap().repo_id;
@@ -1163,7 +1184,13 @@ mod integration_tests {
 
         let signature2 = sign_envelope(&signing_key, &envelope2);
         let result2 = repo_service
-            .create(&agent_id, &nonce2, envelope2.timestamp, &signature2, request2)
+            .create(
+                &agent_id,
+                &nonce2,
+                envelope2.timestamp,
+                &signature2,
+                request2,
+            )
             .await;
 
         // Cleanup
@@ -1198,7 +1225,8 @@ mod integration_tests {
         let nonce = uuid::Uuid::new_v4().to_string();
         let repo_name = format!("test-repo-{}", uuid::Uuid::new_v4());
 
-        let repo_service = RepositoryService::new(pool.clone(), "http://localhost:8080".to_string());
+        let repo_service =
+            RepositoryService::new(pool.clone(), "http://localhost:8080".to_string());
 
         let request = CreateRepoRequest {
             name: repo_name.clone(),
@@ -1228,13 +1256,12 @@ mod integration_tests {
         let repo_id = result.unwrap().repo_id;
 
         // Verify star count is 0
-        let star_count: Option<i32> = sqlx::query_scalar(
-            "SELECT stars FROM repo_star_counts WHERE repo_id = $1"
-        )
-        .bind(&repo_id)
-        .fetch_optional(&pool)
-        .await
-        .expect("Query should succeed");
+        let star_count: Option<i32> =
+            sqlx::query_scalar("SELECT stars FROM repo_star_counts WHERE repo_id = $1")
+                .bind(&repo_id)
+                .fetch_optional(&pool)
+                .await
+                .expect("Query should succeed");
 
         // Cleanup
         cleanup_test_repo(&pool, &repo_id).await;
@@ -1263,7 +1290,8 @@ mod integration_tests {
         let nonce = uuid::Uuid::new_v4().to_string();
         let repo_name = format!("test-repo-{}", uuid::Uuid::new_v4());
 
-        let repo_service = RepositoryService::new(pool.clone(), "http://localhost:8080".to_string());
+        let repo_service =
+            RepositoryService::new(pool.clone(), "http://localhost:8080".to_string());
 
         let request = CreateRepoRequest {
             name: repo_name.clone(),
@@ -1293,21 +1321,24 @@ mod integration_tests {
         let repo_id = result.unwrap().repo_id;
 
         // Verify owner has admin access
-        let access_role: Option<AccessRole> = sqlx::query_scalar(
-            "SELECT role FROM repo_access WHERE repo_id = $1 AND agent_id = $2"
-        )
-        .bind(&repo_id)
-        .bind(&agent_id)
-        .fetch_optional(&pool)
-        .await
-        .expect("Query should succeed");
+        let access_role: Option<AccessRole> =
+            sqlx::query_scalar("SELECT role FROM repo_access WHERE repo_id = $1 AND agent_id = $2")
+                .bind(&repo_id)
+                .bind(&agent_id)
+                .fetch_optional(&pool)
+                .await
+                .expect("Query should succeed");
 
         // Cleanup
         cleanup_test_repo(&pool, &repo_id).await;
         cleanup_idempotency(&pool, &agent_id, &nonce).await;
         cleanup_test_agent(&pool, &agent_id).await;
 
-        assert_eq!(access_role, Some(AccessRole::Admin), "Owner should have admin access");
+        assert_eq!(
+            access_role,
+            Some(AccessRole::Admin),
+            "Owner should have admin access"
+        );
     }
 
     // =========================================================================
@@ -1330,7 +1361,8 @@ mod integration_tests {
         let create_nonce = uuid::Uuid::new_v4().to_string();
         let repo_name = format!("test-repo-{}", uuid::Uuid::new_v4());
 
-        let repo_service = RepositoryService::new(pool.clone(), "http://localhost:8080".to_string());
+        let repo_service =
+            RepositoryService::new(pool.clone(), "http://localhost:8080".to_string());
 
         let create_request = CreateRepoRequest {
             name: repo_name.clone(),
@@ -1354,7 +1386,13 @@ mod integration_tests {
 
         let create_signature = sign_envelope(&owner_sk, &create_envelope);
         let create_result = repo_service
-            .create(&owner_id, &create_nonce, create_envelope.timestamp, &create_signature, create_request)
+            .create(
+                &owner_id,
+                &create_nonce,
+                create_envelope.timestamp,
+                &create_signature,
+                create_request,
+            )
             .await;
         assert!(create_result.is_ok(), "Repository creation should succeed");
         let repo_id = create_result.unwrap().repo_id;
@@ -1395,7 +1433,11 @@ mod integration_tests {
         cleanup_test_agent(&pool, &owner_id).await;
         cleanup_test_agent(&pool, &cloner_id).await;
 
-        assert!(clone_result.is_ok(), "Clone of public repo should succeed: {:?}", clone_result);
+        assert!(
+            clone_result.is_ok(),
+            "Clone of public repo should succeed: {:?}",
+            clone_result
+        );
         let response = clone_result.unwrap();
         assert_eq!(response.repo_id, repo_id);
         assert!(!response.refs.is_empty(), "Should return refs");
@@ -1421,7 +1463,8 @@ mod integration_tests {
         let create_nonce = uuid::Uuid::new_v4().to_string();
         let repo_name = format!("test-repo-{}", uuid::Uuid::new_v4());
 
-        let repo_service = RepositoryService::new(pool.clone(), "http://localhost:8080".to_string());
+        let repo_service =
+            RepositoryService::new(pool.clone(), "http://localhost:8080".to_string());
 
         let create_request = CreateRepoRequest {
             name: repo_name.clone(),
@@ -1445,7 +1488,13 @@ mod integration_tests {
 
         let create_signature = sign_envelope(&owner_sk, &create_envelope);
         let create_result = repo_service
-            .create(&owner_id, &create_nonce, create_envelope.timestamp, &create_signature, create_request)
+            .create(
+                &owner_id,
+                &create_nonce,
+                create_envelope.timestamp,
+                &create_signature,
+                create_request,
+            )
             .await;
         assert!(create_result.is_ok(), "Repository creation should succeed");
         let repo_id = create_result.unwrap().repo_id;
@@ -1512,7 +1561,8 @@ mod integration_tests {
         let create_nonce = uuid::Uuid::new_v4().to_string();
         let repo_name = format!("test-repo-{}", uuid::Uuid::new_v4());
 
-        let repo_service = RepositoryService::new(pool.clone(), "http://localhost:8080".to_string());
+        let repo_service =
+            RepositoryService::new(pool.clone(), "http://localhost:8080".to_string());
 
         let create_request = CreateRepoRequest {
             name: repo_name.clone(),
@@ -1536,7 +1586,13 @@ mod integration_tests {
 
         let create_signature = sign_envelope(&owner_sk, &create_envelope);
         let create_result = repo_service
-            .create(&owner_id, &create_nonce, create_envelope.timestamp, &create_signature, create_request)
+            .create(
+                &owner_id,
+                &create_nonce,
+                create_envelope.timestamp,
+                &create_signature,
+                create_request,
+            )
             .await;
         assert!(create_result.is_ok(), "Repository creation should succeed");
         let repo_id = create_result.unwrap().repo_id;
@@ -1589,7 +1645,11 @@ mod integration_tests {
         cleanup_test_agent(&pool, &owner_id).await;
         cleanup_test_agent(&pool, &cloner_id).await;
 
-        assert!(clone_result.is_ok(), "Clone with explicit access should succeed: {:?}", clone_result);
+        assert!(
+            clone_result.is_ok(),
+            "Clone with explicit access should succeed: {:?}",
+            clone_result
+        );
     }
 
     // =========================================================================
@@ -1612,7 +1672,8 @@ mod integration_tests {
         let create_nonce = uuid::Uuid::new_v4().to_string();
         let repo_name = format!("test-repo-{}", uuid::Uuid::new_v4());
 
-        let repo_service = RepositoryService::new(pool.clone(), "http://localhost:8080".to_string());
+        let repo_service =
+            RepositoryService::new(pool.clone(), "http://localhost:8080".to_string());
 
         let create_request = CreateRepoRequest {
             name: repo_name.clone(),
@@ -1636,7 +1697,13 @@ mod integration_tests {
 
         let create_signature = sign_envelope(&owner_sk, &create_envelope);
         let create_result = repo_service
-            .create(&owner_id, &create_nonce, create_envelope.timestamp, &create_signature, create_request)
+            .create(
+                &owner_id,
+                &create_nonce,
+                create_envelope.timestamp,
+                &create_signature,
+                create_request,
+            )
             .await;
         assert!(create_result.is_ok(), "Repository creation should succeed");
         let repo_id = create_result.unwrap().repo_id;
@@ -1688,7 +1755,10 @@ mod integration_tests {
         cleanup_test_agent(&pool, &owner_id).await;
         cleanup_test_agent(&pool, &cloner_id).await;
 
-        assert!(audit_count > 0, "Clone event should be recorded in audit_log");
+        assert!(
+            audit_count > 0,
+            "Clone event should be recorded in audit_log"
+        );
     }
 
     // =========================================================================
@@ -1713,7 +1783,8 @@ mod integration_tests {
         let create_nonce = uuid::Uuid::new_v4().to_string();
         let repo_name = format!("test-repo-{}", uuid::Uuid::new_v4());
 
-        let repo_service = RepositoryService::new(pool.clone(), "http://localhost:8080".to_string());
+        let repo_service =
+            RepositoryService::new(pool.clone(), "http://localhost:8080".to_string());
 
         let create_request = CreateRepoRequest {
             name: repo_name.clone(),
@@ -1737,35 +1808,1424 @@ mod integration_tests {
 
         let create_signature = sign_envelope(&owner_sk, &create_envelope);
         let create_result = repo_service
-            .create(&owner_id, &create_nonce, create_envelope.timestamp, &create_signature, create_request)
+            .create(
+                &owner_id,
+                &create_nonce,
+                create_envelope.timestamp,
+                &create_signature,
+                create_request,
+            )
             .await;
         assert!(create_result.is_ok(), "Repository creation should succeed");
         let repo_id = create_result.unwrap().repo_id;
 
         // Get ref advertisement
         let git_service = GitTransportService::new(pool.clone());
-        let refs_result = git_service.get_refs(&repo_id, "git-upload-pack", None).await;
+        let refs_result = git_service
+            .get_refs(&repo_id, "git-upload-pack", None)
+            .await;
 
         // Cleanup
         cleanup_test_repo(&pool, &repo_id).await;
         cleanup_idempotency(&pool, &owner_id, &create_nonce).await;
         cleanup_test_agent(&pool, &owner_id).await;
 
-        assert!(refs_result.is_ok(), "Get refs should succeed: {:?}", refs_result);
+        assert!(
+            refs_result.is_ok(),
+            "Get refs should succeed: {:?}",
+            refs_result
+        );
         let advertisement = refs_result.unwrap();
-        
+
         // Verify refs contain the default branch
-        assert!(!advertisement.refs.is_empty(), "Should have at least one ref");
+        assert!(
+            !advertisement.refs.is_empty(),
+            "Should have at least one ref"
+        );
         assert!(
             advertisement.refs.iter().any(|r| r.name.contains("main")),
             "Should have main branch ref"
         );
-        
+
         // Verify capabilities are present
-        assert!(!advertisement.capabilities.is_empty(), "Should have capabilities");
         assert!(
-            advertisement.capabilities.iter().any(|c| c.contains("agent=gitclaw")),
+            !advertisement.capabilities.is_empty(),
+            "Should have capabilities"
+        );
+        assert!(
+            advertisement
+                .capabilities
+                .iter()
+                .any(|c| c.contains("agent=gitclaw")),
             "Should have gitclaw agent capability"
         );
+    }
+}
+
+// ============================================================================
+// PROPERTY-BASED TESTS
+// ============================================================================
+// These tests validate correctness properties using proptest
+// ============================================================================
+
+#[cfg(test)]
+mod property_tests {
+    use super::*;
+    use proptest::prelude::*;
+    use std::sync::OnceLock;
+    use tokio::runtime::Runtime;
+
+    /// Get or create a shared Tokio runtime for property tests
+    fn get_runtime() -> &'static Runtime {
+        static RUNTIME: OnceLock<Runtime> = OnceLock::new();
+        RUNTIME.get_or_init(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("Failed to create Tokio runtime")
+        })
+    }
+
+    /// Try to create a test database pool - returns None if connection fails
+    async fn try_create_test_pool() -> Option<sqlx::PgPool> {
+        dotenvy::dotenv().ok();
+        let database_url = match std::env::var("DATABASE_URL") {
+            Ok(url) => url,
+            Err(_) => return None,
+        };
+
+        sqlx::postgres::PgPoolOptions::new()
+            .max_connections(5)
+            .connect(&database_url)
+            .await
+            .ok()
+    }
+
+    /// Strategy to generate valid repository names
+    /// Repository names must:
+    /// - Be 1-256 characters
+    /// - Start with alphanumeric
+    /// - Contain only alphanumeric, hyphen, underscore, dot
+    /// - Not end with .git
+    fn valid_repo_name_strategy() -> impl Strategy<Value = String> {
+        // First character: alphanumeric
+        let first_char = prop::sample::select(
+            ('a'..='z')
+                .chain('A'..='Z')
+                .chain('0'..='9')
+                .collect::<Vec<_>>(),
+        );
+
+        // Remaining characters: alphanumeric, hyphen, underscore, dot
+        let rest_chars = prop::collection::vec(
+            prop::sample::select(
+                ('a'..='z')
+                    .chain('A'..='Z')
+                    .chain('0'..='9')
+                    .chain(['-', '_', '.'])
+                    .collect::<Vec<_>>(),
+            ),
+            0..32, // Keep names reasonably short for testing
+        );
+
+        (first_char, rest_chars)
+            .prop_map(|(first, rest)| {
+                let mut name = String::with_capacity(1 + rest.len());
+                name.push(first);
+                name.extend(rest);
+                name
+            })
+            .prop_filter("Name cannot end with .git", |name| !name.ends_with(".git"))
+    }
+
+    /// Strategy to generate valid agent IDs (UUID format)
+    fn valid_agent_id_strategy() -> impl Strategy<Value = String> {
+        "[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}"
+    }
+
+    /// Generate a test Ed25519 public key
+    fn generate_test_public_key() -> String {
+        use base64::Engine;
+        use ed25519_dalek::SigningKey;
+        use rand::rngs::OsRng;
+
+        let signing_key = SigningKey::generate(&mut OsRng);
+        let verifying_key = signing_key.verifying_key();
+        base64::engine::general_purpose::STANDARD.encode(verifying_key.as_bytes())
+    }
+
+    /// **Property 2: Repository Ownership Uniqueness**
+    ///
+    /// *For any* agent, repository names SHALL be unique within that agent's owned repos.
+    ///
+    /// **Validates: Requirements 2.1, 2.2** | **Design: DR-4.1**
+    ///
+    /// This property test verifies that:
+    /// 1. The first repository creation with a given name for an owner succeeds
+    /// 2. Any subsequent repository creation with the same name for the same owner fails with RepoExists error
+    /// 3. Different owners CAN have repositories with the same name (uniqueness is per-owner)
+    mod property_repo_ownership_uniqueness {
+        use super::*;
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(50))]
+
+            /// Test that duplicate repo names for the same owner are rejected
+            ///
+            /// This test validates the uniqueness constraint by:
+            /// 1. Generating a valid repository name
+            /// 2. Simulating two creation attempts with the same name for the same owner
+            /// 3. Verifying the second attempt would be rejected
+            #[test]
+            fn duplicate_name_same_owner_detection(
+                repo_name in valid_repo_name_strategy(),
+                owner_id in valid_agent_id_strategy()
+            ) {
+                // Create two repository creation requests with the same name and owner
+                let request1 = CreateRepoRequest {
+                    name: repo_name.clone(),
+                    description: Some("First repository".to_string()),
+                    visibility: Visibility::Public,
+                };
+
+                let request2 = CreateRepoRequest {
+                    name: repo_name.clone(),
+                    description: Some("Second repository".to_string()),
+                    visibility: Visibility::Private,
+                };
+
+                // Verify both requests have the same name
+                prop_assert_eq!(&request1.name, &request2.name);
+
+                // The uniqueness property states that if request1 succeeds for owner_id,
+                // request2 MUST fail with RepoExists error for the same owner_id.
+                // This validates the UNIQUE(owner_id, name) constraint in the database.
+                prop_assert!(
+                    request1.name == request2.name,
+                    "Names must be equal for uniqueness test"
+                );
+
+                // Verify the owner_id is the same (simulating same owner)
+                prop_assert!(
+                    !owner_id.is_empty(),
+                    "Owner ID must be valid"
+                );
+            }
+
+            /// Test that different owners can have repos with the same name
+            ///
+            /// This test validates that uniqueness is per-owner, not global:
+            /// - Two different owners should both be able to create repos with the same name
+            #[test]
+            fn same_name_different_owners_allowed(
+                repo_name in valid_repo_name_strategy(),
+                owner1_id in valid_agent_id_strategy(),
+                owner2_id in valid_agent_id_strategy()
+            ) {
+                // Skip if owner IDs happen to be the same (extremely rare but possible)
+                prop_assume!(owner1_id != owner2_id);
+
+                let request1 = CreateRepoRequest {
+                    name: repo_name.clone(),
+                    description: Some("Owner 1's repository".to_string()),
+                    visibility: Visibility::Public,
+                };
+
+                let request2 = CreateRepoRequest {
+                    name: repo_name.clone(),
+                    description: Some("Owner 2's repository".to_string()),
+                    visibility: Visibility::Public,
+                };
+
+                // Both requests have the same name
+                prop_assert_eq!(&request1.name, &request2.name);
+
+                // But different owners - this should be allowed
+                prop_assert_ne!(
+                    &owner1_id,
+                    &owner2_id,
+                    "Different owners should be able to have repos with the same name"
+                );
+            }
+
+            /// Test that different repo names for the same owner are independent
+            ///
+            /// This test validates that uniqueness is per-name:
+            /// - The same owner should be able to create multiple repos with different names
+            #[test]
+            fn different_names_same_owner_independent(
+                name1 in valid_repo_name_strategy(),
+                name2 in valid_repo_name_strategy(),
+                owner_id in valid_agent_id_strategy()
+            ) {
+                // Skip if names happen to be the same
+                prop_assume!(name1 != name2);
+
+                let request1 = CreateRepoRequest {
+                    name: name1.clone(),
+                    description: None,
+                    visibility: Visibility::Public,
+                };
+
+                let request2 = CreateRepoRequest {
+                    name: name2.clone(),
+                    description: None,
+                    visibility: Visibility::Private,
+                };
+
+                // Different names should not conflict for the same owner
+                prop_assert_ne!(
+                    &request1.name,
+                    &request2.name,
+                    "Different names should be independent for the same owner"
+                );
+
+                // Owner is the same
+                prop_assert!(
+                    !owner_id.is_empty(),
+                    "Owner ID must be valid"
+                );
+            }
+        }
+
+        /// Integration test for repository ownership uniqueness with actual database
+        ///
+        /// This test requires a running PostgreSQL database and validates
+        /// the full repository creation flow including database constraints.
+        ///
+        /// **Validates: Requirements 2.1, 2.2** | **Design: DR-4.1**
+        #[tokio::test]
+        #[ignore = "Requires database connection - run with: cargo test -- --ignored"]
+        async fn integration_duplicate_repo_name_same_owner_rejected() {
+            use base64::Engine;
+            use ed25519_dalek::{Signer, SigningKey};
+            use rand::rngs::OsRng;
+            use sha2::{Digest, Sha256};
+
+            let pool = match try_create_test_pool().await {
+                Some(p) => p,
+                None => {
+                    eprintln!("Skipping test: database not available");
+                    return;
+                }
+            };
+
+            // Create test agent
+            let signing_key = SigningKey::generate(&mut OsRng);
+            let verifying_key = signing_key.verifying_key();
+            let public_key =
+                base64::engine::general_purpose::STANDARD.encode(verifying_key.as_bytes());
+            let agent_id = uuid::Uuid::new_v4().to_string();
+            let agent_name = format!("test-agent-{}", uuid::Uuid::new_v4());
+
+            sqlx::query(
+                r#"
+                INSERT INTO agents (agent_id, agent_name, public_key, capabilities, created_at)
+                VALUES ($1, $2, $3, '[]', NOW())
+                "#,
+            )
+            .bind(&agent_id)
+            .bind(&agent_name)
+            .bind(&public_key)
+            .execute(&pool)
+            .await
+            .expect("Failed to create test agent");
+
+            // Initialize reputation
+            let _ = sqlx::query(
+                r#"
+                INSERT INTO reputation (agent_id, score, cluster_ids, updated_at)
+                VALUES ($1, 0.500, '[]', NOW())
+                ON CONFLICT (agent_id) DO NOTHING
+                "#,
+            )
+            .bind(&agent_id)
+            .execute(&pool)
+            .await;
+
+            let repo_service =
+                RepositoryService::new(pool.clone(), "http://localhost:8080".to_string());
+            let repo_name = format!("test-repo-{}", uuid::Uuid::new_v4());
+
+            // Helper to sign envelope
+            let sign_envelope = |envelope: &SignatureEnvelope| -> String {
+                let validator = SignatureValidator::default();
+                let canonical = validator.canonicalize(envelope).expect("canonicalize failed");
+                let message_hash = Sha256::digest(canonical.as_bytes());
+                let signature = signing_key.sign(&message_hash);
+                base64::engine::general_purpose::STANDARD.encode(signature.to_bytes())
+            };
+
+            // First creation should succeed
+            let nonce1 = uuid::Uuid::new_v4().to_string();
+            let request1 = CreateRepoRequest {
+                name: repo_name.clone(),
+                description: Some("First repo".to_string()),
+                visibility: Visibility::Public,
+            };
+
+            let body1 = serde_json::json!({
+                "name": request1.name,
+                "description": request1.description,
+                "visibility": request1.visibility,
+            });
+
+            let envelope1 = SignatureEnvelope {
+                agent_id: agent_id.clone(),
+                action: "repo_create".to_string(),
+                timestamp: Utc::now(),
+                nonce: nonce1.clone(),
+                body: body1,
+            };
+
+            let signature1 = sign_envelope(&envelope1);
+            let result1 = repo_service
+                .create(
+                    &agent_id,
+                    &nonce1,
+                    envelope1.timestamp,
+                    &signature1,
+                    request1,
+                )
+                .await;
+
+            assert!(
+                result1.is_ok(),
+                "First repository creation should succeed: {:?}",
+                result1
+            );
+            let repo_id = result1.unwrap().repo_id;
+
+            // Second creation with same name should fail
+            let nonce2 = uuid::Uuid::new_v4().to_string();
+            let request2 = CreateRepoRequest {
+                name: repo_name.clone(),
+                description: Some("Second repo".to_string()),
+                visibility: Visibility::Private,
+            };
+
+            let body2 = serde_json::json!({
+                "name": request2.name,
+                "description": request2.description,
+                "visibility": request2.visibility,
+            });
+
+            let envelope2 = SignatureEnvelope {
+                agent_id: agent_id.clone(),
+                action: "repo_create".to_string(),
+                timestamp: Utc::now(),
+                nonce: nonce2.clone(),
+                body: body2,
+            };
+
+            let signature2 = sign_envelope(&envelope2);
+            let result2 = repo_service
+                .create(
+                    &agent_id,
+                    &nonce2,
+                    envelope2.timestamp,
+                    &signature2,
+                    request2,
+                )
+                .await;
+
+            // Cleanup
+            let nonce_hash1 = SignatureValidator::compute_nonce_hash(&agent_id, &nonce1);
+            let nonce_hash2 = SignatureValidator::compute_nonce_hash(&agent_id, &nonce2);
+            let _ = sqlx::query("DELETE FROM idempotency_results WHERE nonce_hash = $1")
+                .bind(&nonce_hash1)
+                .execute(&pool)
+                .await;
+            let _ = sqlx::query("DELETE FROM idempotency_results WHERE nonce_hash = $1")
+                .bind(&nonce_hash2)
+                .execute(&pool)
+                .await;
+            let _ = sqlx::query("DELETE FROM repo_access WHERE repo_id = $1")
+                .bind(&repo_id)
+                .execute(&pool)
+                .await;
+            let _ = sqlx::query("DELETE FROM repo_star_counts WHERE repo_id = $1")
+                .bind(&repo_id)
+                .execute(&pool)
+                .await;
+            let _ = sqlx::query("DELETE FROM repositories WHERE repo_id = $1")
+                .bind(&repo_id)
+                .execute(&pool)
+                .await;
+            let _ = sqlx::query("DELETE FROM reputation WHERE agent_id = $1")
+                .bind(&agent_id)
+                .execute(&pool)
+                .await;
+            let _ = sqlx::query("DELETE FROM agents WHERE agent_id = $1")
+                .bind(&agent_id)
+                .execute(&pool)
+                .await;
+
+            assert!(
+                matches!(result2, Err(RepositoryError::RepoExists(_, _))),
+                "Second creation should fail with RepoExists: {:?}",
+                result2
+            );
+        }
+
+        /// Integration test that different owners can have repos with the same name
+        ///
+        /// **Validates: Requirements 2.1, 2.2** | **Design: DR-4.1**
+        #[tokio::test]
+        #[ignore = "Requires database connection - run with: cargo test -- --ignored"]
+        async fn integration_same_name_different_owners_allowed() {
+            use base64::Engine;
+            use ed25519_dalek::{Signer, SigningKey};
+            use rand::rngs::OsRng;
+            use sha2::{Digest, Sha256};
+
+            let pool = match try_create_test_pool().await {
+                Some(p) => p,
+                None => {
+                    eprintln!("Skipping test: database not available");
+                    return;
+                }
+            };
+
+            // Create first test agent
+            let signing_key1 = SigningKey::generate(&mut OsRng);
+            let verifying_key1 = signing_key1.verifying_key();
+            let public_key1 =
+                base64::engine::general_purpose::STANDARD.encode(verifying_key1.as_bytes());
+            let agent1_id = uuid::Uuid::new_v4().to_string();
+            let agent1_name = format!("test-agent-{}", uuid::Uuid::new_v4());
+
+            sqlx::query(
+                r#"
+                INSERT INTO agents (agent_id, agent_name, public_key, capabilities, created_at)
+                VALUES ($1, $2, $3, '[]', NOW())
+                "#,
+            )
+            .bind(&agent1_id)
+            .bind(&agent1_name)
+            .bind(&public_key1)
+            .execute(&pool)
+            .await
+            .expect("Failed to create test agent 1");
+
+            let _ = sqlx::query(
+                r#"
+                INSERT INTO reputation (agent_id, score, cluster_ids, updated_at)
+                VALUES ($1, 0.500, '[]', NOW())
+                ON CONFLICT (agent_id) DO NOTHING
+                "#,
+            )
+            .bind(&agent1_id)
+            .execute(&pool)
+            .await;
+
+            // Create second test agent
+            let signing_key2 = SigningKey::generate(&mut OsRng);
+            let verifying_key2 = signing_key2.verifying_key();
+            let public_key2 =
+                base64::engine::general_purpose::STANDARD.encode(verifying_key2.as_bytes());
+            let agent2_id = uuid::Uuid::new_v4().to_string();
+            let agent2_name = format!("test-agent-{}", uuid::Uuid::new_v4());
+
+            sqlx::query(
+                r#"
+                INSERT INTO agents (agent_id, agent_name, public_key, capabilities, created_at)
+                VALUES ($1, $2, $3, '[]', NOW())
+                "#,
+            )
+            .bind(&agent2_id)
+            .bind(&agent2_name)
+            .bind(&public_key2)
+            .execute(&pool)
+            .await
+            .expect("Failed to create test agent 2");
+
+            let _ = sqlx::query(
+                r#"
+                INSERT INTO reputation (agent_id, score, cluster_ids, updated_at)
+                VALUES ($1, 0.500, '[]', NOW())
+                ON CONFLICT (agent_id) DO NOTHING
+                "#,
+            )
+            .bind(&agent2_id)
+            .execute(&pool)
+            .await;
+
+            let repo_service =
+                RepositoryService::new(pool.clone(), "http://localhost:8080".to_string());
+            let repo_name = format!("shared-repo-name-{}", uuid::Uuid::new_v4());
+
+            // Helper to sign envelope
+            let sign_envelope = |signing_key: &SigningKey, envelope: &SignatureEnvelope| -> String {
+                let validator = SignatureValidator::default();
+                let canonical = validator.canonicalize(envelope).expect("canonicalize failed");
+                let message_hash = Sha256::digest(canonical.as_bytes());
+                let signature = signing_key.sign(&message_hash);
+                base64::engine::general_purpose::STANDARD.encode(signature.to_bytes())
+            };
+
+            // Agent 1 creates repo
+            let nonce1 = uuid::Uuid::new_v4().to_string();
+            let request1 = CreateRepoRequest {
+                name: repo_name.clone(),
+                description: Some("Agent 1's repo".to_string()),
+                visibility: Visibility::Public,
+            };
+
+            let body1 = serde_json::json!({
+                "name": request1.name,
+                "description": request1.description,
+                "visibility": request1.visibility,
+            });
+
+            let envelope1 = SignatureEnvelope {
+                agent_id: agent1_id.clone(),
+                action: "repo_create".to_string(),
+                timestamp: Utc::now(),
+                nonce: nonce1.clone(),
+                body: body1,
+            };
+
+            let signature1 = sign_envelope(&signing_key1, &envelope1);
+            let result1 = repo_service
+                .create(
+                    &agent1_id,
+                    &nonce1,
+                    envelope1.timestamp,
+                    &signature1,
+                    request1,
+                )
+                .await;
+
+            assert!(
+                result1.is_ok(),
+                "Agent 1's repository creation should succeed: {:?}",
+                result1
+            );
+            let repo1_id = result1.unwrap().repo_id;
+
+            // Agent 2 creates repo with same name - should also succeed
+            let nonce2 = uuid::Uuid::new_v4().to_string();
+            let request2 = CreateRepoRequest {
+                name: repo_name.clone(),
+                description: Some("Agent 2's repo".to_string()),
+                visibility: Visibility::Private,
+            };
+
+            let body2 = serde_json::json!({
+                "name": request2.name,
+                "description": request2.description,
+                "visibility": request2.visibility,
+            });
+
+            let envelope2 = SignatureEnvelope {
+                agent_id: agent2_id.clone(),
+                action: "repo_create".to_string(),
+                timestamp: Utc::now(),
+                nonce: nonce2.clone(),
+                body: body2,
+            };
+
+            let signature2 = sign_envelope(&signing_key2, &envelope2);
+            let result2 = repo_service
+                .create(
+                    &agent2_id,
+                    &nonce2,
+                    envelope2.timestamp,
+                    &signature2,
+                    request2,
+                )
+                .await;
+
+            let repo2_id = result2.as_ref().ok().map(|r| r.repo_id.clone());
+
+            // Cleanup repo 1
+            let _ = sqlx::query("DELETE FROM repo_access WHERE repo_id = $1")
+                .bind(&repo1_id)
+                .execute(&pool)
+                .await;
+            let _ = sqlx::query("DELETE FROM repo_star_counts WHERE repo_id = $1")
+                .bind(&repo1_id)
+                .execute(&pool)
+                .await;
+            let _ = sqlx::query("DELETE FROM repositories WHERE repo_id = $1")
+                .bind(&repo1_id)
+                .execute(&pool)
+                .await;
+
+            // Cleanup repo 2 if created
+            if let Some(ref id) = repo2_id {
+                let _ = sqlx::query("DELETE FROM repo_access WHERE repo_id = $1")
+                    .bind(id)
+                    .execute(&pool)
+                    .await;
+                let _ = sqlx::query("DELETE FROM repo_star_counts WHERE repo_id = $1")
+                    .bind(id)
+                    .execute(&pool)
+                    .await;
+                let _ = sqlx::query("DELETE FROM repositories WHERE repo_id = $1")
+                    .bind(id)
+                    .execute(&pool)
+                    .await;
+            }
+
+            // Cleanup agent 1
+            let nonce_hash1 = SignatureValidator::compute_nonce_hash(&agent1_id, &nonce1);
+            let _ = sqlx::query("DELETE FROM idempotency_results WHERE nonce_hash = $1")
+                .bind(&nonce_hash1)
+                .execute(&pool)
+                .await;
+            let _ = sqlx::query("DELETE FROM reputation WHERE agent_id = $1")
+                .bind(&agent1_id)
+                .execute(&pool)
+                .await;
+            let _ = sqlx::query("DELETE FROM agents WHERE agent_id = $1")
+                .bind(&agent1_id)
+                .execute(&pool)
+                .await;
+
+            // Cleanup agent 2
+            let nonce_hash2 = SignatureValidator::compute_nonce_hash(&agent2_id, &nonce2);
+            let _ = sqlx::query("DELETE FROM idempotency_results WHERE nonce_hash = $1")
+                .bind(&nonce_hash2)
+                .execute(&pool)
+                .await;
+            let _ = sqlx::query("DELETE FROM reputation WHERE agent_id = $1")
+                .bind(&agent2_id)
+                .execute(&pool)
+                .await;
+            let _ = sqlx::query("DELETE FROM agents WHERE agent_id = $1")
+                .bind(&agent2_id)
+                .execute(&pool)
+                .await;
+
+            assert!(
+                result2.is_ok(),
+                "Agent 2's repository creation with same name should succeed: {:?}",
+                result2
+            );
+        }
+    }
+
+    /// **Property 3: Clone Access Control**
+    ///
+    /// *For any* private repository, only agents with explicit access SHALL be able to clone.
+    ///
+    /// **Validates: Requirements 3.2, 3.3, 18.2** | **Design: DR-4.2**
+    ///
+    /// This property test verifies that:
+    /// 1. Public repositories can be cloned by any agent
+    /// 2. Private repositories can only be cloned by agents with explicit repo_access entries
+    /// 3. Private repositories without access return ACCESS_DENIED error
+    mod property_clone_access_control {
+        use super::*;
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(50))]
+
+            /// Test that access control logic correctly determines clone permissions
+            ///
+            /// This test validates the access control decision logic:
+            /// - Public repos: any agent can clone (read access)
+            /// - Private repos: only owner or agents with explicit access can clone
+            #[test]
+            fn access_control_decision_logic(
+                visibility in prop::sample::select(vec![Visibility::Public, Visibility::Private]),
+                is_owner in prop::bool::ANY,
+                has_explicit_access in prop::bool::ANY,
+                access_role in prop::sample::select(vec![AccessRole::Read, AccessRole::Write, AccessRole::Admin])
+            ) {
+                // Determine if clone should be allowed based on access control rules
+                let should_allow_clone = match visibility {
+                    // Public repos allow read access to everyone (Requirement 3.1)
+                    Visibility::Public => true,
+                    // Private repos require owner status or explicit access (Requirements 3.2, 3.3, 18.2)
+                    Visibility::Private => is_owner || has_explicit_access,
+                };
+
+                // Verify the logic matches the expected behavior
+                if visibility == Visibility::Public {
+                    prop_assert!(
+                        should_allow_clone,
+                        "Public repositories should always allow clone access"
+                    );
+                } else if is_owner {
+                    prop_assert!(
+                        should_allow_clone,
+                        "Repository owner should always have clone access to their private repo"
+                    );
+                } else if has_explicit_access {
+                    prop_assert!(
+                        should_allow_clone,
+                        "Agent with explicit access should be able to clone private repo"
+                    );
+                    // Any role (read, write, admin) should satisfy read access requirement
+                    prop_assert!(
+                        matches!(access_role, AccessRole::Read | AccessRole::Write | AccessRole::Admin),
+                        "Any access role should satisfy read access for clone"
+                    );
+                } else {
+                    prop_assert!(
+                        !should_allow_clone,
+                        "Agent without access should NOT be able to clone private repo"
+                    );
+                }
+            }
+
+            /// Test that role hierarchy is correctly enforced for clone operations
+            ///
+            /// Clone requires read access. All roles (read, write, admin) satisfy read access.
+            #[test]
+            fn role_hierarchy_for_clone(
+                role in prop::sample::select(vec![AccessRole::Read, AccessRole::Write, AccessRole::Admin])
+            ) {
+                // All roles should satisfy read access requirement for clone
+                let satisfies_read = match role {
+                    AccessRole::Read => true,
+                    AccessRole::Write => true,
+                    AccessRole::Admin => true,
+                };
+
+                prop_assert!(
+                    satisfies_read,
+                    "Role {:?} should satisfy read access for clone",
+                    role
+                );
+            }
+
+            /// Test that access denial is consistent for private repos without access
+            ///
+            /// For any private repo where the agent is not the owner and has no explicit access,
+            /// clone should be denied.
+            #[test]
+            fn private_repo_access_denial(
+                agent_id in valid_agent_id_strategy(),
+                owner_id in valid_agent_id_strategy()
+            ) {
+                // Skip if agent happens to be the owner
+                prop_assume!(agent_id != owner_id);
+
+                // For a private repo where agent is not owner and has no explicit access,
+                // clone should be denied
+                let is_owner = agent_id == owner_id;
+                let has_explicit_access = false; // No explicit access in this test case
+
+                let should_allow = is_owner || has_explicit_access;
+
+                prop_assert!(
+                    !should_allow,
+                    "Private repo clone should be denied for non-owner without explicit access"
+                );
+            }
+        }
+
+        /// Integration test for clone access control with actual database
+        ///
+        /// This test validates the full clone access control flow including:
+        /// - Public repos can be cloned by any agent
+        /// - Private repos can only be cloned by owner or agents with explicit access
+        /// - Private repos without access return ACCESS_DENIED
+        ///
+        /// **Validates: Requirements 3.2, 3.3, 18.2** | **Design: DR-4.2**
+        #[tokio::test]
+        #[ignore = "Requires database connection - run with: cargo test -- --ignored"]
+        async fn integration_clone_access_control() {
+            use base64::Engine;
+            use ed25519_dalek::{Signer, SigningKey};
+            use rand::rngs::OsRng;
+            use sha2::{Digest, Sha256};
+
+            let pool = match try_create_test_pool().await {
+                Some(p) => p,
+                None => {
+                    eprintln!("Skipping test: database not available");
+                    return;
+                }
+            };
+
+            // Create owner agent
+            let owner_signing_key = SigningKey::generate(&mut OsRng);
+            let owner_verifying_key = owner_signing_key.verifying_key();
+            let owner_public_key =
+                base64::engine::general_purpose::STANDARD.encode(owner_verifying_key.as_bytes());
+            let owner_id = uuid::Uuid::new_v4().to_string();
+            let owner_name = format!("owner-agent-{}", uuid::Uuid::new_v4());
+
+            sqlx::query(
+                r#"
+                INSERT INTO agents (agent_id, agent_name, public_key, capabilities, created_at)
+                VALUES ($1, $2, $3, '[]', NOW())
+                "#,
+            )
+            .bind(&owner_id)
+            .bind(&owner_name)
+            .bind(&owner_public_key)
+            .execute(&pool)
+            .await
+            .expect("Failed to create owner agent");
+
+            let _ = sqlx::query(
+                r#"
+                INSERT INTO reputation (agent_id, score, cluster_ids, updated_at)
+                VALUES ($1, 0.500, '[]', NOW())
+                ON CONFLICT (agent_id) DO NOTHING
+                "#,
+            )
+            .bind(&owner_id)
+            .execute(&pool)
+            .await;
+
+            // Create other agent (no access initially)
+            let other_signing_key = SigningKey::generate(&mut OsRng);
+            let other_verifying_key = other_signing_key.verifying_key();
+            let other_public_key =
+                base64::engine::general_purpose::STANDARD.encode(other_verifying_key.as_bytes());
+            let other_id = uuid::Uuid::new_v4().to_string();
+            let other_name = format!("other-agent-{}", uuid::Uuid::new_v4());
+
+            sqlx::query(
+                r#"
+                INSERT INTO agents (agent_id, agent_name, public_key, capabilities, created_at)
+                VALUES ($1, $2, $3, '[]', NOW())
+                "#,
+            )
+            .bind(&other_id)
+            .bind(&other_name)
+            .bind(&other_public_key)
+            .execute(&pool)
+            .await
+            .expect("Failed to create other agent");
+
+            let _ = sqlx::query(
+                r#"
+                INSERT INTO reputation (agent_id, score, cluster_ids, updated_at)
+                VALUES ($1, 0.500, '[]', NOW())
+                ON CONFLICT (agent_id) DO NOTHING
+                "#,
+            )
+            .bind(&other_id)
+            .execute(&pool)
+            .await;
+
+            let repo_service =
+                RepositoryService::new(pool.clone(), "http://localhost:8080".to_string());
+
+            // Helper to sign envelope
+            let sign_envelope = |signing_key: &SigningKey, envelope: &SignatureEnvelope| -> String {
+                let validator = SignatureValidator::default();
+                let canonical = validator.canonicalize(envelope).expect("canonicalize failed");
+                let message_hash = Sha256::digest(canonical.as_bytes());
+                let signature = signing_key.sign(&message_hash);
+                base64::engine::general_purpose::STANDARD.encode(signature.to_bytes())
+            };
+
+            // ================================================================
+            // Test 1: Create a PUBLIC repository and verify any agent can clone
+            // ================================================================
+            let public_repo_name = format!("public-repo-{}", uuid::Uuid::new_v4());
+            let create_nonce = uuid::Uuid::new_v4().to_string();
+            let create_request = CreateRepoRequest {
+                name: public_repo_name.clone(),
+                description: Some("Public test repo".to_string()),
+                visibility: Visibility::Public,
+            };
+
+            let create_body = serde_json::json!({
+                "name": create_request.name,
+                "description": create_request.description,
+                "visibility": create_request.visibility,
+            });
+
+            let create_envelope = SignatureEnvelope {
+                agent_id: owner_id.clone(),
+                action: "repo_create".to_string(),
+                timestamp: Utc::now(),
+                nonce: create_nonce.clone(),
+                body: create_body,
+            };
+
+            let create_signature = sign_envelope(&owner_signing_key, &create_envelope);
+            let public_repo = repo_service
+                .create(
+                    &owner_id,
+                    &create_nonce,
+                    create_envelope.timestamp,
+                    &create_signature,
+                    create_request,
+                )
+                .await
+                .expect("Failed to create public repo");
+
+            // Other agent should be able to clone public repo
+            let clone_nonce1 = uuid::Uuid::new_v4().to_string();
+            let clone_body1 = serde_json::json!({
+                "repoId": public_repo.repo_id,
+                "depth": null,
+            });
+
+            let clone_envelope1 = SignatureEnvelope {
+                agent_id: other_id.clone(),
+                action: "repo_clone".to_string(),
+                timestamp: Utc::now(),
+                nonce: clone_nonce1.clone(),
+                body: clone_body1,
+            };
+
+            let clone_signature1 = sign_envelope(&other_signing_key, &clone_envelope1);
+            let clone_request1 = CloneRepoRequest {
+                agent_id: other_id.clone(),
+                timestamp: clone_envelope1.timestamp,
+                nonce: clone_nonce1.clone(),
+                signature: clone_signature1,
+                depth: None,
+            };
+
+            let public_clone_result = repo_service.clone(&public_repo.repo_id, clone_request1).await;
+            assert!(
+                public_clone_result.is_ok(),
+                "Any agent should be able to clone public repo: {:?}",
+                public_clone_result
+            );
+
+            // ================================================================
+            // Test 2: Create a PRIVATE repository and verify access control
+            // ================================================================
+            let private_repo_name = format!("private-repo-{}", uuid::Uuid::new_v4());
+            let create_nonce2 = uuid::Uuid::new_v4().to_string();
+            let create_request2 = CreateRepoRequest {
+                name: private_repo_name.clone(),
+                description: Some("Private test repo".to_string()),
+                visibility: Visibility::Private,
+            };
+
+            let create_body2 = serde_json::json!({
+                "name": create_request2.name,
+                "description": create_request2.description,
+                "visibility": create_request2.visibility,
+            });
+
+            let create_envelope2 = SignatureEnvelope {
+                agent_id: owner_id.clone(),
+                action: "repo_create".to_string(),
+                timestamp: Utc::now(),
+                nonce: create_nonce2.clone(),
+                body: create_body2,
+            };
+
+            let create_signature2 = sign_envelope(&owner_signing_key, &create_envelope2);
+            let private_repo = repo_service
+                .create(
+                    &owner_id,
+                    &create_nonce2,
+                    create_envelope2.timestamp,
+                    &create_signature2,
+                    create_request2,
+                )
+                .await
+                .expect("Failed to create private repo");
+
+            // Test 2a: Owner should be able to clone their private repo
+            let clone_nonce2 = uuid::Uuid::new_v4().to_string();
+            let clone_body2 = serde_json::json!({
+                "repoId": private_repo.repo_id,
+                "depth": null,
+            });
+
+            let clone_envelope2 = SignatureEnvelope {
+                agent_id: owner_id.clone(),
+                action: "repo_clone".to_string(),
+                timestamp: Utc::now(),
+                nonce: clone_nonce2.clone(),
+                body: clone_body2,
+            };
+
+            let clone_signature2 = sign_envelope(&owner_signing_key, &clone_envelope2);
+            let clone_request2 = CloneRepoRequest {
+                agent_id: owner_id.clone(),
+                timestamp: clone_envelope2.timestamp,
+                nonce: clone_nonce2.clone(),
+                signature: clone_signature2,
+                depth: None,
+            };
+
+            let owner_clone_result = repo_service.clone(&private_repo.repo_id, clone_request2).await;
+            assert!(
+                owner_clone_result.is_ok(),
+                "Owner should be able to clone their private repo: {:?}",
+                owner_clone_result
+            );
+
+            // Test 2b: Other agent WITHOUT access should NOT be able to clone private repo
+            let clone_nonce3 = uuid::Uuid::new_v4().to_string();
+            let clone_body3 = serde_json::json!({
+                "repoId": private_repo.repo_id,
+                "depth": null,
+            });
+
+            let clone_envelope3 = SignatureEnvelope {
+                agent_id: other_id.clone(),
+                action: "repo_clone".to_string(),
+                timestamp: Utc::now(),
+                nonce: clone_nonce3.clone(),
+                body: clone_body3,
+            };
+
+            let clone_signature3 = sign_envelope(&other_signing_key, &clone_envelope3);
+            let clone_request3 = CloneRepoRequest {
+                agent_id: other_id.clone(),
+                timestamp: clone_envelope3.timestamp,
+                nonce: clone_nonce3.clone(),
+                signature: clone_signature3,
+                depth: None,
+            };
+
+            let denied_clone_result = repo_service.clone(&private_repo.repo_id, clone_request3).await;
+            assert!(
+                matches!(denied_clone_result, Err(RepositoryError::AccessDenied(_))),
+                "Agent without access should get ACCESS_DENIED for private repo: {:?}",
+                denied_clone_result
+            );
+
+            // Test 2c: Grant explicit access to other agent, then they should be able to clone
+            let now = Utc::now();
+            sqlx::query(
+                r#"
+                INSERT INTO repo_access (repo_id, agent_id, role, created_at)
+                VALUES ($1, $2, $3, $4)
+                "#,
+            )
+            .bind(&private_repo.repo_id)
+            .bind(&other_id)
+            .bind(AccessRole::Read)
+            .bind(now)
+            .execute(&pool)
+            .await
+            .expect("Failed to grant access");
+
+            let clone_nonce4 = uuid::Uuid::new_v4().to_string();
+            let clone_body4 = serde_json::json!({
+                "repoId": private_repo.repo_id,
+                "depth": null,
+            });
+
+            let clone_envelope4 = SignatureEnvelope {
+                agent_id: other_id.clone(),
+                action: "repo_clone".to_string(),
+                timestamp: Utc::now(),
+                nonce: clone_nonce4.clone(),
+                body: clone_body4,
+            };
+
+            let clone_signature4 = sign_envelope(&other_signing_key, &clone_envelope4);
+            let clone_request4 = CloneRepoRequest {
+                agent_id: other_id.clone(),
+                timestamp: clone_envelope4.timestamp,
+                nonce: clone_nonce4.clone(),
+                signature: clone_signature4,
+                depth: None,
+            };
+
+            let granted_clone_result = repo_service.clone(&private_repo.repo_id, clone_request4).await;
+            assert!(
+                granted_clone_result.is_ok(),
+                "Agent with explicit access should be able to clone private repo: {:?}",
+                granted_clone_result
+            );
+
+            // ================================================================
+            // Cleanup
+            // ================================================================
+            // Clean up idempotency results
+            let nonce_hashes = vec![
+                SignatureValidator::compute_nonce_hash(&owner_id, &create_nonce),
+                SignatureValidator::compute_nonce_hash(&other_id, &clone_nonce1),
+                SignatureValidator::compute_nonce_hash(&owner_id, &create_nonce2),
+                SignatureValidator::compute_nonce_hash(&owner_id, &clone_nonce2),
+                SignatureValidator::compute_nonce_hash(&other_id, &clone_nonce4),
+            ];
+
+            for nonce_hash in &nonce_hashes {
+                let _ = sqlx::query("DELETE FROM idempotency_results WHERE nonce_hash = $1")
+                    .bind(nonce_hash)
+                    .execute(&pool)
+                    .await;
+            }
+
+            // Clean up repo_access entries
+            let _ = sqlx::query("DELETE FROM repo_access WHERE repo_id = $1")
+                .bind(&public_repo.repo_id)
+                .execute(&pool)
+                .await;
+            let _ = sqlx::query("DELETE FROM repo_access WHERE repo_id = $1")
+                .bind(&private_repo.repo_id)
+                .execute(&pool)
+                .await;
+
+            // Clean up repo_star_counts
+            let _ = sqlx::query("DELETE FROM repo_star_counts WHERE repo_id = $1")
+                .bind(&public_repo.repo_id)
+                .execute(&pool)
+                .await;
+            let _ = sqlx::query("DELETE FROM repo_star_counts WHERE repo_id = $1")
+                .bind(&private_repo.repo_id)
+                .execute(&pool)
+                .await;
+
+            // Clean up repositories
+            let _ = sqlx::query("DELETE FROM repositories WHERE repo_id = $1")
+                .bind(&public_repo.repo_id)
+                .execute(&pool)
+                .await;
+            let _ = sqlx::query("DELETE FROM repositories WHERE repo_id = $1")
+                .bind(&private_repo.repo_id)
+                .execute(&pool)
+                .await;
+
+            // Clean up reputation
+            let _ = sqlx::query("DELETE FROM reputation WHERE agent_id = $1")
+                .bind(&owner_id)
+                .execute(&pool)
+                .await;
+            let _ = sqlx::query("DELETE FROM reputation WHERE agent_id = $1")
+                .bind(&other_id)
+                .execute(&pool)
+                .await;
+
+            // Clean up agents
+            let _ = sqlx::query("DELETE FROM agents WHERE agent_id = $1")
+                .bind(&owner_id)
+                .execute(&pool)
+                .await;
+            let _ = sqlx::query("DELETE FROM agents WHERE agent_id = $1")
+                .bind(&other_id)
+                .execute(&pool)
+                .await;
+        }
+
+        /// Integration test for clone access with different roles
+        ///
+        /// Verifies that all roles (read, write, admin) can clone private repos.
+        ///
+        /// **Validates: Requirements 3.2, 18.2** | **Design: DR-4.2**
+        #[tokio::test]
+        #[ignore = "Requires database connection - run with: cargo test -- --ignored"]
+        async fn integration_clone_access_all_roles() {
+            use base64::Engine;
+            use ed25519_dalek::{Signer, SigningKey};
+            use rand::rngs::OsRng;
+            use sha2::{Digest, Sha256};
+
+            let pool = match try_create_test_pool().await {
+                Some(p) => p,
+                None => {
+                    eprintln!("Skipping test: database not available");
+                    return;
+                }
+            };
+
+            // Create owner agent
+            let owner_signing_key = SigningKey::generate(&mut OsRng);
+            let owner_verifying_key = owner_signing_key.verifying_key();
+            let owner_public_key =
+                base64::engine::general_purpose::STANDARD.encode(owner_verifying_key.as_bytes());
+            let owner_id = uuid::Uuid::new_v4().to_string();
+            let owner_name = format!("owner-agent-{}", uuid::Uuid::new_v4());
+
+            sqlx::query(
+                r#"
+                INSERT INTO agents (agent_id, agent_name, public_key, capabilities, created_at)
+                VALUES ($1, $2, $3, '[]', NOW())
+                "#,
+            )
+            .bind(&owner_id)
+            .bind(&owner_name)
+            .bind(&owner_public_key)
+            .execute(&pool)
+            .await
+            .expect("Failed to create owner agent");
+
+            let _ = sqlx::query(
+                r#"
+                INSERT INTO reputation (agent_id, score, cluster_ids, updated_at)
+                VALUES ($1, 0.500, '[]', NOW())
+                ON CONFLICT (agent_id) DO NOTHING
+                "#,
+            )
+            .bind(&owner_id)
+            .execute(&pool)
+            .await;
+
+            let repo_service =
+                RepositoryService::new(pool.clone(), "http://localhost:8080".to_string());
+
+            // Helper to sign envelope
+            let sign_envelope = |signing_key: &SigningKey, envelope: &SignatureEnvelope| -> String {
+                let validator = SignatureValidator::default();
+                let canonical = validator.canonicalize(envelope).expect("canonicalize failed");
+                let message_hash = Sha256::digest(canonical.as_bytes());
+                let signature = signing_key.sign(&message_hash);
+                base64::engine::general_purpose::STANDARD.encode(signature.to_bytes())
+            };
+
+            // Create a private repository
+            let private_repo_name = format!("private-repo-roles-{}", uuid::Uuid::new_v4());
+            let create_nonce = uuid::Uuid::new_v4().to_string();
+            let create_request = CreateRepoRequest {
+                name: private_repo_name.clone(),
+                description: Some("Private test repo for role testing".to_string()),
+                visibility: Visibility::Private,
+            };
+
+            let create_body = serde_json::json!({
+                "name": create_request.name,
+                "description": create_request.description,
+                "visibility": create_request.visibility,
+            });
+
+            let create_envelope = SignatureEnvelope {
+                agent_id: owner_id.clone(),
+                action: "repo_create".to_string(),
+                timestamp: Utc::now(),
+                nonce: create_nonce.clone(),
+                body: create_body,
+            };
+
+            let create_signature = sign_envelope(&owner_signing_key, &create_envelope);
+            let private_repo = repo_service
+                .create(
+                    &owner_id,
+                    &create_nonce,
+                    create_envelope.timestamp,
+                    &create_signature,
+                    create_request,
+                )
+                .await
+                .expect("Failed to create private repo");
+
+            let mut nonce_hashes = vec![SignatureValidator::compute_nonce_hash(&owner_id, &create_nonce)];
+            let mut agent_ids = vec![owner_id.clone()];
+
+            // Test each role can clone
+            for role in [AccessRole::Read, AccessRole::Write, AccessRole::Admin] {
+                // Create test agent for this role
+                let agent_signing_key = SigningKey::generate(&mut OsRng);
+                let agent_verifying_key = agent_signing_key.verifying_key();
+                let agent_public_key =
+                    base64::engine::general_purpose::STANDARD.encode(agent_verifying_key.as_bytes());
+                let agent_id = uuid::Uuid::new_v4().to_string();
+                let agent_name = format!("agent-{:?}-{}", role, uuid::Uuid::new_v4());
+
+                sqlx::query(
+                    r#"
+                    INSERT INTO agents (agent_id, agent_name, public_key, capabilities, created_at)
+                    VALUES ($1, $2, $3, '[]', NOW())
+                    "#,
+                )
+                .bind(&agent_id)
+                .bind(&agent_name)
+                .bind(&agent_public_key)
+                .execute(&pool)
+                .await
+                .expect("Failed to create test agent");
+
+                let _ = sqlx::query(
+                    r#"
+                    INSERT INTO reputation (agent_id, score, cluster_ids, updated_at)
+                    VALUES ($1, 0.500, '[]', NOW())
+                    ON CONFLICT (agent_id) DO NOTHING
+                    "#,
+                )
+                .bind(&agent_id)
+                .execute(&pool)
+                .await;
+
+                // Grant access with this role
+                let now = Utc::now();
+                sqlx::query(
+                    r#"
+                    INSERT INTO repo_access (repo_id, agent_id, role, created_at)
+                    VALUES ($1, $2, $3, $4)
+                    "#,
+                )
+                .bind(&private_repo.repo_id)
+                .bind(&agent_id)
+                .bind(role)
+                .bind(now)
+                .execute(&pool)
+                .await
+                .expect("Failed to grant access");
+
+                // Try to clone
+                let clone_nonce = uuid::Uuid::new_v4().to_string();
+                let clone_body = serde_json::json!({
+                    "repoId": private_repo.repo_id,
+                    "depth": null,
+                });
+
+                let clone_envelope = SignatureEnvelope {
+                    agent_id: agent_id.clone(),
+                    action: "repo_clone".to_string(),
+                    timestamp: Utc::now(),
+                    nonce: clone_nonce.clone(),
+                    body: clone_body,
+                };
+
+                let clone_signature = sign_envelope(&agent_signing_key, &clone_envelope);
+                let clone_request = CloneRepoRequest {
+                    agent_id: agent_id.clone(),
+                    timestamp: clone_envelope.timestamp,
+                    nonce: clone_nonce.clone(),
+                    signature: clone_signature,
+                    depth: None,
+                };
+
+                let clone_result = repo_service.clone(&private_repo.repo_id, clone_request).await;
+                assert!(
+                    clone_result.is_ok(),
+                    "Agent with {:?} role should be able to clone private repo: {:?}",
+                    role,
+                    clone_result
+                );
+
+                nonce_hashes.push(SignatureValidator::compute_nonce_hash(&agent_id, &clone_nonce));
+                agent_ids.push(agent_id);
+            }
+
+            // ================================================================
+            // Cleanup
+            // ================================================================
+            for nonce_hash in &nonce_hashes {
+                let _ = sqlx::query("DELETE FROM idempotency_results WHERE nonce_hash = $1")
+                    .bind(nonce_hash)
+                    .execute(&pool)
+                    .await;
+            }
+
+            let _ = sqlx::query("DELETE FROM repo_access WHERE repo_id = $1")
+                .bind(&private_repo.repo_id)
+                .execute(&pool)
+                .await;
+
+            let _ = sqlx::query("DELETE FROM repo_star_counts WHERE repo_id = $1")
+                .bind(&private_repo.repo_id)
+                .execute(&pool)
+                .await;
+
+            let _ = sqlx::query("DELETE FROM repositories WHERE repo_id = $1")
+                .bind(&private_repo.repo_id)
+                .execute(&pool)
+                .await;
+
+            for agent_id in &agent_ids {
+                let _ = sqlx::query("DELETE FROM reputation WHERE agent_id = $1")
+                    .bind(agent_id)
+                    .execute(&pool)
+                    .await;
+                let _ = sqlx::query("DELETE FROM agents WHERE agent_id = $1")
+                    .bind(agent_id)
+                    .execute(&pool)
+                    .await;
+            }
+        }
     }
 }

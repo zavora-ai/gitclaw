@@ -2,17 +2,17 @@
 //!
 //! HTTP handlers for repository operations.
 
-use actix_web::{web, HttpResponse};
+use actix_web::{HttpResponse, web};
 use serde::Serialize;
 
+use crate::AppState;
 use crate::error::AppError;
 use crate::models::{
-    CloneRepoRequest, SignedCreateRepoRequest, SignedGrantAccessRequest,
-    SignedListAccessRequest, SignedRevokeAccessRequest,
+    CloneRepoRequest, SignedCreateRepoRequest, SignedGrantAccessRequest, SignedListAccessRequest,
+    SignedRevokeAccessRequest,
 };
-use crate::services::repository::RepositoryError;
 use crate::services::RepositoryService;
-use crate::AppState;
+use crate::services::repository::RepositoryError;
 
 /// Standard API response wrapper
 #[derive(Serialize)]
@@ -84,7 +84,9 @@ pub async fn get_repo(
 
     match repo {
         Some(repo) => Ok(HttpResponse::Ok().json(ApiResponse::new(repo))),
-        None => Err(AppError::NotFound(format!("Repository not found: {repo_id}"))),
+        None => Err(AppError::NotFound(format!(
+            "Repository not found: {repo_id}"
+        ))),
     }
 }
 
@@ -123,11 +125,10 @@ fn map_repo_error(e: RepositoryError) -> AppError {
         RepositoryError::RepoNotFound(id) => {
             AppError::NotFound(format!("Repository not found: {id}"))
         }
-        RepositoryError::AgentNotFound(id) => {
-            AppError::NotFound(format!("Agent not found: {id}"))
-        }
+        RepositoryError::AgentNotFound(id) => AppError::NotFound(format!("Agent not found: {id}")),
         RepositoryError::InvalidRepoName(msg) => AppError::Validation(msg),
         RepositoryError::AccessDenied(msg) => AppError::Unauthorized(msg),
+        RepositoryError::Suspended(msg) => AppError::Forbidden(format!("SUSPENDED_AGENT: {msg}")),
         RepositoryError::SignatureError(e) => AppError::Unauthorized(e.to_string()),
         RepositoryError::IdempotencyError(e) => match e {
             crate::services::IdempotencyError::ReplayAttack { .. } => {
@@ -168,6 +169,7 @@ pub async fn grant_access(
 /// Path parameters for revoke access endpoint
 #[derive(Debug, serde::Deserialize)]
 pub struct RevokeAccessPath {
+    #[serde(rename = "repoId")]
     pub repo_id: String,
     pub agent_id: String,
 }
@@ -222,15 +224,23 @@ pub async fn list_collaborators(
     Ok(HttpResponse::Ok().json(ApiResponse::new(response)))
 }
 
+/// Configure access control routes (must be registered before main repo routes)
+pub fn configure_access_routes(cfg: &mut web::ServiceConfig) {
+    // Use resource-based routing instead of scope to avoid path parameter conflicts
+    cfg.service(
+        web::resource("/repos/{repoId}/access")
+            .route(web::post().to(grant_access))
+            .route(web::get().to(list_collaborators)),
+    );
+    cfg.service(
+        web::resource("/repos/{repoId}/access/{agent_id}").route(web::delete().to(revoke_access)),
+    );
+}
+
 /// Configure repository routes
 pub fn configure_repo_routes(cfg: &mut web::ServiceConfig) {
-    cfg.service(
-        web::scope("/repos")
-            .route("", web::post().to(create_repo))
-            .route("/{repoId}", web::get().to(get_repo))
-            .route("/{repoId}/clone", web::post().to(clone_repo))
-            .route("/{repoId}/access", web::post().to(grant_access))
-            .route("/{repoId}/access", web::get().to(list_collaborators))
-            .route("/{repo_id}/access/{agent_id}", web::delete().to(revoke_access)),
-    );
+    // Use resources instead of scope to avoid conflicts with other /repos/* routes
+    cfg.service(web::resource("/repos").route(web::post().to(create_repo)));
+    cfg.service(web::resource("/repos/{repoId}").route(web::get().to(get_repo)));
+    cfg.service(web::resource("/repos/{repoId}/clone").route(web::post().to(clone_repo)));
 }

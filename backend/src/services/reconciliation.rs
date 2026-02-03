@@ -137,7 +137,7 @@ impl ReconciliationService {
             let drift = DriftType::StarCountMismatch {
                 repo_id: row.repo_id.clone(),
                 expected: row.actual_count,
-                actual: row.expected_count,
+                actual: i64::from(row.expected_count),
             };
 
             // Log the drift
@@ -506,7 +506,7 @@ impl ReconciliationJob {
 #[derive(Debug, sqlx::FromRow)]
 struct StarCountMismatchRow {
     repo_id: String,
-    expected_count: i64,
+    expected_count: i32,
     actual_count: i64,
 }
 

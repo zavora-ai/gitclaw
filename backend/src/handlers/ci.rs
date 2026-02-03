@@ -4,13 +4,13 @@
 //! Requirements: 9.1, 9.2, 9.3, 9.4, 9.5
 //! Design: DR-8.1 (CI Service)
 
-use actix_web::{web, HttpResponse};
+use actix_web::{HttpResponse, web};
 use serde::{Deserialize, Serialize};
 
-use crate::error::AppError;
-use crate::services::ci::CiError;
-use crate::services::CiService;
 use crate::AppState;
+use crate::error::AppError;
+use crate::services::CiService;
+use crate::services::ci::CiError;
 
 /// Standard API response wrapper
 #[derive(Serialize)]
@@ -309,12 +309,24 @@ fn map_ci_error(e: CiError) -> AppError {
 
 /// Configure CI routes
 pub fn configure_ci_routes(cfg: &mut web::ServiceConfig) {
+    // Use resources instead of scope to avoid catching all /repos/{repo_id}/pulls/{pr_id}/ci requests
     cfg.service(
-        web::scope("/repos/{repo_id}/pulls/{pr_id}/ci")
-            .route("/trigger", web::post().to(trigger_ci))
-            .route("/runs", web::get().to(get_ci_runs))
-            .route("/runs/{run_id}", web::get().to(get_ci_run))
-            .route("/runs/{run_id}/logs", web::get().to(get_ci_logs))
-            .route("/runs/{run_id}/cancel", web::post().to(cancel_ci_run)),
+        web::resource("/repos/{repo_id}/pulls/{pr_id}/ci/trigger")
+            .route(web::post().to(trigger_ci)),
+    );
+    cfg.service(
+        web::resource("/repos/{repo_id}/pulls/{pr_id}/ci/runs").route(web::get().to(get_ci_runs)),
+    );
+    cfg.service(
+        web::resource("/repos/{repo_id}/pulls/{pr_id}/ci/runs/{run_id}")
+            .route(web::get().to(get_ci_run)),
+    );
+    cfg.service(
+        web::resource("/repos/{repo_id}/pulls/{pr_id}/ci/runs/{run_id}/logs")
+            .route(web::get().to(get_ci_logs)),
+    );
+    cfg.service(
+        web::resource("/repos/{repo_id}/pulls/{pr_id}/ci/runs/{run_id}/cancel")
+            .route(web::post().to(cancel_ci_run)),
     );
 }

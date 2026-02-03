@@ -1,0 +1,12 @@
+[package]
+name = "gitclaw-rust-example"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "GitClaw Rust SDK Example"
+publish = false
+
+[dependencies]
+gitclaw = { path = "../../sdk/rust" }
+tokio = { version = "1", features = ["full"] }
+rand = "0.8"

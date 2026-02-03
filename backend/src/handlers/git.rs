@@ -3,15 +3,15 @@
 //! HTTP handlers for Git protocol operations.
 //! Design: DR-4.3 (Git Transport Service), DR-5.1 (Push Service)
 
-use actix_web::{web, HttpRequest, HttpResponse};
+use actix_web::{HttpRequest, HttpResponse, web};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::error::AppError;
-use crate::services::git_transport::{format_ref_advertisement, GitTransportError};
-use crate::services::push::{PushError, PushService, RefUpdateRequest as PushRefUpdate};
-use crate::services::GitTransportService;
 use crate::AppState;
+use crate::error::AppError;
+use crate::services::GitTransportService;
+use crate::services::git_transport::{GitTransportError, format_ref_advertisement};
+use crate::services::push::{PushError, PushService, RefUpdateRequest as PushRefUpdate};
 
 /// Query parameters for info/refs endpoint
 #[derive(Debug, Deserialize)]
@@ -236,6 +236,12 @@ fn map_git_error(e: GitTransportError) -> AppError {
         GitTransportError::InvalidPackfile(msg) => {
             AppError::Validation(format!("Invalid packfile: {}", msg))
         }
+        GitTransportError::ObjectNotFound(msg) => {
+            AppError::NotFound(format!("Object not found: {}", msg))
+        }
+        GitTransportError::StorageError(msg) => {
+            AppError::Internal(format!("Storage error: {}", msg))
+        }
         GitTransportError::SignatureError(e) => AppError::Unauthorized(e.to_string()),
         GitTransportError::Database(e) => AppError::Database(e),
         GitTransportError::Audit(e) => AppError::Internal(format!("Audit error: {}", e)),
@@ -245,44 +251,41 @@ fn map_git_error(e: GitTransportError) -> AppError {
 /// Map Push service errors to application errors
 fn map_push_error(e: PushError) -> AppError {
     match e {
-        PushError::RepoNotFound(id) => {
-            AppError::NotFound(format!("Repository not found: {}", id))
-        }
-        PushError::AgentNotFound(id) => {
-            AppError::NotFound(format!("Agent not found: {}", id))
-        }
+        PushError::RepoNotFound(id) => AppError::NotFound(format!("Repository not found: {}", id)),
+        PushError::AgentNotFound(id) => AppError::NotFound(format!("Agent not found: {}", id)),
         PushError::AccessDenied(msg) => AppError::Unauthorized(msg),
-        PushError::NonFastForward(ref_name) => {
-            AppError::Conflict(format!(
-                "Non-fast-forward update rejected for ref {}. Use force push to override.",
-                ref_name
-            ))
-        }
+        PushError::NonFastForward(ref_name) => AppError::Conflict(format!(
+            "Non-fast-forward update rejected for ref {}. Use force push to override.",
+            ref_name
+        )),
         PushError::InvalidPackfile(msg) => {
             AppError::Validation(format!("Invalid packfile: {}", msg))
         }
-        PushError::InvalidObject(msg) => {
-            AppError::Validation(format!("Invalid object: {}", msg))
-        }
+        PushError::InvalidObject(msg) => AppError::Validation(format!("Invalid object: {}", msg)),
         PushError::RefNotFound(ref_name) => {
             AppError::NotFound(format!("Ref not found: {}", ref_name))
         }
+        PushError::Suspended(msg) => AppError::Forbidden(format!("SUSPENDED_AGENT: {}", msg)),
         PushError::SignatureError(e) => AppError::Unauthorized(e.to_string()),
-        PushError::IdempotencyError(e) => {
-            AppError::Conflict(format!("Idempotency error: {}", e))
-        }
+        PushError::IdempotencyError(e) => AppError::Conflict(format!("Idempotency error: {}", e)),
         PushError::Database(e) => AppError::Database(e),
         PushError::Audit(e) => AppError::Internal(format!("Audit error: {}", e)),
+        PushError::StorageError(msg) => AppError::Internal(format!("Storage error: {}", msg)),
     }
 }
 
 /// Configure Git transport routes
 pub fn configure_git_routes(cfg: &mut web::ServiceConfig) {
+    // Use resources instead of scope to avoid catching all /repos/{repoId} requests
     cfg.service(
-        web::scope("/repos/{repoId}")
-            .route("/info/refs", web::get().to(info_refs))
-            .route("/info/refs", web::post().to(info_refs))
-            .route("/git-upload-pack", web::post().to(git_upload_pack))
-            .route("/git-receive-pack", web::post().to(git_receive_pack)),
+        web::resource("/repos/{repoId}/info/refs")
+            .route(web::get().to(info_refs))
+            .route(web::post().to(info_refs)),
+    );
+    cfg.service(
+        web::resource("/repos/{repoId}/git-upload-pack").route(web::post().to(git_upload_pack)),
+    );
+    cfg.service(
+        web::resource("/repos/{repoId}/git-receive-pack").route(web::post().to(git_receive_pack)),
     );
 }

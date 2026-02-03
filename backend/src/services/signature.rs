@@ -3,10 +3,12 @@
 //! Implements cryptographic signature validation for all mutating actions.
 //! Supports Ed25519 and ECDSA (P-256) signatures with JSON Canonicalization Scheme (JCS, RFC 8785).
 
-use base64::{engine::general_purpose::STANDARD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use chrono::{DateTime, Duration, Utc};
 use ed25519_dalek::{Signature as Ed25519Signature, VerifyingKey as Ed25519VerifyingKey};
-use p256::ecdsa::{signature::Verifier, Signature as P256Signature, VerifyingKey as P256VerifyingKey};
+use p256::ecdsa::{
+    Signature as P256Signature, VerifyingKey as P256VerifyingKey, signature::Verifier,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -39,6 +41,11 @@ pub enum SignatureError {
 
     #[error("Invalid JSON: {0}")]
     InvalidJson(String),
+
+    /// Agent is suspended and cannot perform mutating operations
+    /// Requirements: 2.6 - Suspended agents must be rejected with SUSPENDED_AGENT error
+    #[error("Agent is suspended: {0}")]
+    Suspended(String),
 }
 
 /// Signature envelope containing all signed data
@@ -141,14 +148,14 @@ impl SignatureValidator {
 
         // Check if timestamp is too old
         if age > Duration::minutes(self.config.max_age_minutes) {
-            return Err(SignatureError::TimestampExpired(self.config.max_age_minutes));
+            return Err(SignatureError::TimestampExpired(
+                self.config.max_age_minutes,
+            ));
         }
 
         // Check if timestamp is too far in the future
         if age < Duration::seconds(-self.config.max_future_seconds) {
-            return Err(SignatureError::TimestampInFuture(
-                -age.num_seconds(),
-            ));
+            return Err(SignatureError::TimestampInFuture(-age.num_seconds()));
         }
 
         Ok(())
@@ -185,10 +192,8 @@ impl SignatureValidator {
                 Ok(self.escape_string(s))
             }
             serde_json::Value::Array(arr) => {
-                let elements: Result<Vec<String>, _> = arr
-                    .iter()
-                    .map(|v| self.canonicalize_value(v))
-                    .collect();
+                let elements: Result<Vec<String>, _> =
+                    arr.iter().map(|v| self.canonicalize_value(v)).collect();
                 Ok(format!("[{}]", elements?.join(",")))
             }
             serde_json::Value::Object(obj) => {
@@ -354,12 +359,96 @@ impl SignatureValidator {
     }
 }
 
+/// Check if an agent is suspended
+///
+/// This function queries the database to check if an agent is suspended.
+/// If the agent is suspended, it returns a `SignatureError::Suspended` error.
+///
+/// Requirements: 2.6 - Suspended agents must be rejected with SUSPENDED_AGENT error
+///
+/// # Arguments
+/// * `pool` - Database connection pool
+/// * `agent_id` - The agent ID to check
+///
+/// # Returns
+/// * `Ok(())` if the agent is not suspended
+/// * `Err(SignatureError::Suspended)` if the agent is suspended
+/// * `Err(SignatureError::MissingField)` if the agent is not found
+pub async fn check_agent_not_suspended(
+    pool: &sqlx::PgPool,
+    agent_id: &str,
+) -> Result<(), SignatureError> {
+    let result: Option<(bool, Option<String>)> = sqlx::query_as(
+        "SELECT suspended, suspended_reason FROM agents WHERE agent_id = $1",
+    )
+    .bind(agent_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| SignatureError::InvalidJson(format!("Database error: {e}")))?;
+
+    match result {
+        None => Err(SignatureError::MissingField(format!(
+            "Agent not found: {agent_id}"
+        ))),
+        Some((true, reason)) => {
+            let message = match reason {
+                Some(r) => format!("{agent_id} - {r}"),
+                None => agent_id.to_string(),
+            };
+            Err(SignatureError::Suspended(message))
+        }
+        Some((false, _)) => Ok(()),
+    }
+}
+
+/// Get agent's public key and check suspension status in a single query
+///
+/// This is an optimized function that retrieves the agent's public key
+/// while also checking if the agent is suspended. This reduces database
+/// round-trips for mutating operations.
+///
+/// Requirements: 2.6 - Suspended agents must be rejected with SUSPENDED_AGENT error
+///
+/// # Arguments
+/// * `pool` - Database connection pool
+/// * `agent_id` - The agent ID to check
+///
+/// # Returns
+/// * `Ok(public_key)` if the agent exists and is not suspended
+/// * `Err(SignatureError::Suspended)` if the agent is suspended
+/// * `Err(SignatureError::MissingField)` if the agent is not found
+pub async fn get_agent_public_key_if_not_suspended(
+    pool: &sqlx::PgPool,
+    agent_id: &str,
+) -> Result<String, SignatureError> {
+    let result: Option<(String, bool, Option<String>)> = sqlx::query_as(
+        "SELECT public_key, suspended, suspended_reason FROM agents WHERE agent_id = $1",
+    )
+    .bind(agent_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| SignatureError::InvalidJson(format!("Database error: {e}")))?;
+
+    match result {
+        None => Err(SignatureError::MissingField(format!(
+            "Agent not found: {agent_id}"
+        ))),
+        Some((_, true, reason)) => {
+            let message = match reason {
+                Some(r) => format!("{agent_id} - {r}"),
+                None => agent_id.to_string(),
+            };
+            Err(SignatureError::Suspended(message))
+        }
+        Some((public_key, false, _)) => Ok(public_key),
+    }
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use ed25519_dalek::SigningKey;
-    use p256::ecdsa::{signature::Signer, SigningKey as P256SigningKey};
+    use p256::ecdsa::{SigningKey as P256SigningKey, signature::Signer};
     use rand::rngs::OsRng;
 
     fn create_test_validator() -> SignatureValidator {
@@ -376,28 +465,32 @@ mod tests {
     pub fn generate_p256_keypair() -> (P256SigningKey, String) {
         let signing_key = P256SigningKey::random(&mut OsRng);
         let verifying_key = signing_key.verifying_key();
-        let public_key = format!(
-            "ecdsa:{}",
-            STANDARD.encode(verifying_key.to_sec1_bytes())
-        );
+        let public_key = format!("ecdsa:{}", STANDARD.encode(verifying_key.to_sec1_bytes()));
         (signing_key, public_key)
     }
 
     pub fn sign_envelope_ed25519(signing_key: &SigningKey, envelope: &SignatureEnvelope) -> String {
         let validator = create_test_validator();
-        let canonical = validator.canonicalize(envelope).expect("canonicalize failed");
+        let canonical = validator
+            .canonicalize(envelope)
+            .expect("canonicalize failed");
         let message_hash = Sha256::digest(canonical.as_bytes());
-        
+
         use ed25519_dalek::Signer;
         let signature = signing_key.sign(&message_hash);
         STANDARD.encode(signature.to_bytes())
     }
 
-    pub fn sign_envelope_p256(signing_key: &P256SigningKey, envelope: &SignatureEnvelope) -> String {
+    pub fn sign_envelope_p256(
+        signing_key: &P256SigningKey,
+        envelope: &SignatureEnvelope,
+    ) -> String {
         let validator = create_test_validator();
-        let canonical = validator.canonicalize(envelope).expect("canonicalize failed");
+        let canonical = validator
+            .canonicalize(envelope)
+            .expect("canonicalize failed");
         let message_hash = Sha256::digest(canonical.as_bytes());
-        
+
         let signature: P256Signature = signing_key.sign(&message_hash);
         STANDARD.encode(signature.to_der())
     }
@@ -517,17 +610,17 @@ mod tests {
     fn test_nonce_hash_computation() {
         let agent_id = "agent-123";
         let nonce = "550e8400-e29b-41d4-a716-446655440000";
-        
+
         let hash = SignatureValidator::compute_nonce_hash(agent_id, nonce);
-        
+
         // Verify it's a valid hex string of correct length (SHA256 = 64 hex chars)
         assert_eq!(hash.len(), 64);
         assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
-        
+
         // Same inputs should produce same hash
         let hash2 = SignatureValidator::compute_nonce_hash(agent_id, nonce);
         assert_eq!(hash, hash2);
-        
+
         // Different inputs should produce different hash
         let hash3 = SignatureValidator::compute_nonce_hash(agent_id, "different-nonce");
         assert_ne!(hash, hash3);
@@ -536,7 +629,7 @@ mod tests {
     #[test]
     fn test_canonicalization_key_ordering() {
         let validator = create_test_validator();
-        
+
         // Create envelope with body that has keys in non-alphabetical order
         let envelope = SignatureEnvelope {
             agent_id: "agent-123".to_string(),
@@ -553,18 +646,18 @@ mod tests {
         };
 
         let canonical = validator.canonicalize(&envelope).expect("canonicalize");
-        
+
         // Verify keys are sorted
         assert!(canonical.contains("\"action\":"));
         assert!(canonical.contains("\"agentId\":"));
-        
+
         // Body keys should be sorted: apple, middle, zebra
         let body_start = canonical.find("\"body\":").expect("find body");
         let body_section = &canonical[body_start..];
         let apple_pos = body_section.find("\"apple\"").expect("find apple");
         let middle_pos = body_section.find("\"middle\"").expect("find middle");
         let zebra_pos = body_section.find("\"zebra\"").expect("find zebra");
-        
+
         assert!(apple_pos < middle_pos, "apple should come before middle");
         assert!(middle_pos < zebra_pos, "middle should come before zebra");
     }
@@ -572,7 +665,7 @@ mod tests {
     #[test]
     fn test_canonicalization_no_whitespace() {
         let validator = create_test_validator();
-        
+
         let envelope = SignatureEnvelope {
             agent_id: "agent-123".to_string(),
             action: "star".to_string(),
@@ -584,7 +677,7 @@ mod tests {
         };
 
         let canonical = validator.canonicalize(&envelope).expect("canonicalize");
-        
+
         // Should not contain any unnecessary whitespace
         assert!(!canonical.contains(" :"));
         assert!(!canonical.contains(": "));
@@ -629,14 +722,12 @@ mod tests {
 
         let git_body = GitTransportBody {
             packfile_hash: "abc123def456".to_string(),
-            ref_updates: vec![
-                RefUpdate {
-                    ref_name: "refs/heads/main".to_string(),
-                    old_oid: "0000000000000000000000000000000000000000".to_string(),
-                    new_oid: "abc123def456789012345678901234567890abcd".to_string(),
-                    force: false,
-                },
-            ],
+            ref_updates: vec![RefUpdate {
+                ref_name: "refs/heads/main".to_string(),
+                old_oid: "0000000000000000000000000000000000000000".to_string(),
+                new_oid: "abc123def456789012345678901234567890abcd".to_string(),
+                force: false,
+            }],
         };
 
         let envelope = SignatureEnvelope {
@@ -653,11 +744,11 @@ mod tests {
     }
 
     /// **Property 15: Signature Validation**
-    /// 
+    ///
     /// For any signed action with invalid signature, the action SHALL be rejected.
-    /// 
+    ///
     /// **Validates: Requirements 12.1** | **Design: DR-3.1**
-    /// 
+    ///
     /// This property test verifies that:
     /// 1. Valid signatures are accepted
     /// 2. Invalid signatures (wrong key, tampered data, malformed) are rejected
@@ -706,7 +797,7 @@ mod tests {
             #![proptest_config(ProptestConfig::with_cases(100))]
 
             /// Test that valid Ed25519 signatures are accepted
-            /// 
+            ///
             /// This test validates that properly signed envelopes pass validation:
             /// 1. Generate a random keypair
             /// 2. Create an envelope with random valid data
@@ -732,7 +823,7 @@ mod tests {
 
                 let signature = sign_envelope_ed25519(&signing_key, &envelope);
                 let result = validator.validate(&envelope, &signature, &public_key);
-                
+
                 prop_assert!(
                     result.is_ok(),
                     "Valid Ed25519 signature should be accepted: {:?}",
@@ -741,7 +832,7 @@ mod tests {
             }
 
             /// Test that valid ECDSA signatures are accepted
-            /// 
+            ///
             /// This test validates that properly signed envelopes with ECDSA pass validation
             #[test]
             fn valid_ecdsa_signature_accepted(
@@ -763,7 +854,7 @@ mod tests {
 
                 let signature = sign_envelope_p256(&signing_key, &envelope);
                 let result = validator.validate(&envelope, &signature, &public_key);
-                
+
                 prop_assert!(
                     result.is_ok(),
                     "Valid ECDSA signature should be accepted: {:?}",
@@ -772,7 +863,7 @@ mod tests {
             }
 
             /// Test that signatures with wrong key are rejected
-            /// 
+            ///
             /// This test validates that signatures made with a different private key
             /// than the one corresponding to the public key are rejected.
             #[test]
@@ -783,7 +874,7 @@ mod tests {
                 body in body_strategy()
             ) {
                 let validator = create_test_validator();
-                
+
                 // Generate two different keypairs
                 let (signing_key, _) = generate_ed25519_keypair();
                 let (_, wrong_public_key) = generate_ed25519_keypair();
@@ -799,7 +890,7 @@ mod tests {
                 // Sign with one key, verify with another
                 let signature = sign_envelope_ed25519(&signing_key, &envelope);
                 let result = validator.validate(&envelope, &signature, &wrong_public_key);
-                
+
                 prop_assert!(
                     matches!(result, Err(SignatureError::VerificationFailed)),
                     "Signature with wrong key should be rejected: {:?}",
@@ -808,7 +899,7 @@ mod tests {
             }
 
             /// Test that tampered envelope data is rejected
-            /// 
+            ///
             /// This test validates that any modification to the signed envelope
             /// after signing causes the signature to be rejected.
             #[test]
@@ -847,7 +938,7 @@ mod tests {
 
                 // Verify tampered envelope is rejected
                 let result = validator.validate(&tampered_envelope, &signature, &public_key);
-                
+
                 prop_assert!(
                     matches!(result, Err(SignatureError::VerificationFailed)),
                     "Tampered envelope should be rejected: {:?}",
@@ -856,7 +947,7 @@ mod tests {
             }
 
             /// Test that malformed signatures are rejected
-            /// 
+            ///
             /// This test validates that signatures that are not valid base64
             /// or have incorrect length are rejected.
             #[test]
@@ -880,7 +971,7 @@ mod tests {
 
                 // Use garbage as signature
                 let result = validator.validate(&envelope, &garbage, &public_key);
-                
+
                 prop_assert!(
                     result.is_err(),
                     "Malformed signature should be rejected"
@@ -888,7 +979,7 @@ mod tests {
             }
 
             /// Test signature validation is deterministic
-            /// 
+            ///
             /// This test validates that the same envelope, signature, and key
             /// always produce the same validation result.
             #[test]
@@ -923,7 +1014,6 @@ mod tests {
         }
     }
 }
-
 
 // Integration tests for Signature Validation
 // These tests validate the full signature validation flow end-to-end
@@ -966,7 +1056,9 @@ mod integration_tests {
     /// Sign an envelope with Ed25519
     fn sign_envelope(signing_key: &SigningKey, envelope: &SignatureEnvelope) -> String {
         let validator = SignatureValidator::default();
-        let canonical = validator.canonicalize(envelope).expect("canonicalize failed");
+        let canonical = validator
+            .canonicalize(envelope)
+            .expect("canonicalize failed");
         let message_hash = Sha256::digest(canonical.as_bytes());
         let signature = signing_key.sign(&message_hash);
         STANDARD.encode(signature.to_bytes())
@@ -1064,7 +1156,11 @@ mod integration_tests {
         // Cleanup
         cleanup_test_agent(&pool, &agent_id).await;
 
-        assert!(result.is_ok(), "Valid signature should pass verification: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "Valid signature should pass verification: {:?}",
+            result
+        );
     }
 
     // =========================================================================
@@ -1293,7 +1389,11 @@ mod integration_tests {
 
         // Validate - should succeed because JCS produces consistent canonical form
         let result1 = validator.validate(&envelope, &signature, &public_key);
-        assert!(result1.is_ok(), "First validation should pass: {:?}", result1);
+        assert!(
+            result1.is_ok(),
+            "First validation should pass: {:?}",
+            result1
+        );
 
         // Create the same envelope again (keys might be in different order internally)
         let envelope2 = SignatureEnvelope {
@@ -1558,7 +1658,10 @@ mod integration_tests {
         let hash1 = SignatureValidator::compute_nonce_hash("agent-1", nonce);
         let hash2 = SignatureValidator::compute_nonce_hash("agent-2", nonce);
 
-        assert_ne!(hash1, hash2, "Different agents should produce different hashes");
+        assert_ne!(
+            hash1, hash2,
+            "Different agents should produce different hashes"
+        );
     }
 
     // =========================================================================

@@ -5,18 +5,13 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 
 /// Visibility enum for repositories
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
 #[sqlx(type_name = "visibility", rename_all = "lowercase")]
 #[serde(rename_all = "lowercase")]
 pub enum Visibility {
+    #[default]
     Public,
     Private,
-}
-
-impl Default for Visibility {
-    fn default() -> Self {
-        Self::Public
-    }
 }
 
 /// Access role for repository collaborators
@@ -100,7 +95,6 @@ pub struct RepoInfo {
     pub stars: i32,
     pub created_at: DateTime<Utc>,
 }
-
 
 /// Request payload for cloning a repository
 #[derive(Debug, Clone, Deserialize)]

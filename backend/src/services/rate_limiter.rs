@@ -179,7 +179,10 @@ impl RateLimiterService {
     }
 
     /// Create a rate limiter with custom bucket size (for testing)
-    pub fn with_bucket_size(configs: HashMap<String, RateLimitConfig>, bucket_size_secs: u64) -> Self {
+    pub fn with_bucket_size(
+        configs: HashMap<String, RateLimitConfig>,
+        bucket_size_secs: u64,
+    ) -> Self {
         Self {
             configs,
             state: Arc::new(RwLock::new(HashMap::new())),
@@ -222,7 +225,9 @@ impl RateLimiterService {
         let window_start = now - Duration::seconds(config.window_secs as i64);
 
         // Clean up old buckets and count requests in current window
-        action_state.buckets.retain(|b| b.start_time >= window_start);
+        action_state
+            .buckets
+            .retain(|b| b.start_time >= window_start);
 
         let current_count: u32 = action_state.buckets.iter().map(|b| b.count).sum();
 
@@ -230,7 +235,8 @@ impl RateLimiterService {
         if current_count >= config.max_requests {
             // Calculate retry_after based on oldest bucket expiry
             let retry_after = if let Some(oldest) = action_state.buckets.first() {
-                let oldest_expiry = oldest.start_time + Duration::seconds(config.window_secs as i64);
+                let oldest_expiry =
+                    oldest.start_time + Duration::seconds(config.window_secs as i64);
                 let diff = oldest_expiry - now;
                 diff.num_seconds().max(1) as u64
             } else {
@@ -296,7 +302,8 @@ impl RateLimiterService {
     /// Get the start time of the bucket containing the given timestamp
     fn get_bucket_start(&self, time: DateTime<Utc>) -> DateTime<Utc> {
         let timestamp_secs = time.timestamp();
-        let bucket_start_secs = (timestamp_secs / self.bucket_size_secs as i64) * self.bucket_size_secs as i64;
+        let bucket_start_secs =
+            (timestamp_secs / self.bucket_size_secs as i64) * self.bucket_size_secs as i64;
         DateTime::from_timestamp(bucket_start_secs, 0).unwrap_or(time)
     }
 
@@ -346,7 +353,6 @@ pub struct RateLimitStatus {
     pub reset_at: DateTime<Utc>,
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -380,14 +386,21 @@ mod tests {
 
         // Use up the limit
         for _ in 0..5 {
-            limiter.check_and_record("agent1", "test_action").await.unwrap();
+            limiter
+                .check_and_record("agent1", "test_action")
+                .await
+                .unwrap();
         }
 
         // 6th request should be blocked
         let result = limiter.check_and_record("agent1", "test_action").await;
         assert!(result.is_err());
 
-        if let Err(RateLimitError::RateLimited { action, retry_after }) = result {
+        if let Err(RateLimitError::RateLimited {
+            action,
+            retry_after,
+        }) = result
+        {
             assert_eq!(action, "test_action");
             assert!(retry_after > 0);
         }
@@ -399,14 +412,27 @@ mod tests {
 
         // Agent 1 uses up their limit
         for _ in 0..5 {
-            limiter.check_and_record("agent1", "test_action").await.unwrap();
+            limiter
+                .check_and_record("agent1", "test_action")
+                .await
+                .unwrap();
         }
 
         // Agent 1 should be blocked
-        assert!(limiter.check_and_record("agent1", "test_action").await.is_err());
+        assert!(
+            limiter
+                .check_and_record("agent1", "test_action")
+                .await
+                .is_err()
+        );
 
         // Agent 2 should still be allowed (Requirement 13.3)
-        assert!(limiter.check_and_record("agent2", "test_action").await.is_ok());
+        assert!(
+            limiter
+                .check_and_record("agent2", "test_action")
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]
@@ -423,14 +449,27 @@ mod tests {
 
         // Use up test_action limit
         for _ in 0..5 {
-            limiter.check_and_record("agent1", "test_action").await.unwrap();
+            limiter
+                .check_and_record("agent1", "test_action")
+                .await
+                .unwrap();
         }
 
         // test_action should be blocked
-        assert!(limiter.check_and_record("agent1", "test_action").await.is_err());
+        assert!(
+            limiter
+                .check_and_record("agent1", "test_action")
+                .await
+                .is_err()
+        );
 
         // other_action should still be allowed
-        assert!(limiter.check_and_record("agent1", "other_action").await.is_ok());
+        assert!(
+            limiter
+                .check_and_record("agent1", "other_action")
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]
@@ -445,7 +484,10 @@ mod tests {
 
         // Should still be able to make 5 requests
         for _ in 0..5 {
-            limiter.check_and_record("agent1", "test_action").await.unwrap();
+            limiter
+                .check_and_record("agent1", "test_action")
+                .await
+                .unwrap();
         }
     }
 
@@ -455,10 +497,16 @@ mod tests {
 
         assert_eq!(limiter.get_current_count("agent1", "test_action").await, 0);
 
-        limiter.check_and_record("agent1", "test_action").await.unwrap();
+        limiter
+            .check_and_record("agent1", "test_action")
+            .await
+            .unwrap();
         assert_eq!(limiter.get_current_count("agent1", "test_action").await, 1);
 
-        limiter.check_and_record("agent1", "test_action").await.unwrap();
+        limiter
+            .check_and_record("agent1", "test_action")
+            .await
+            .unwrap();
         assert_eq!(limiter.get_current_count("agent1", "test_action").await, 2);
     }
 
@@ -468,15 +516,28 @@ mod tests {
 
         // Use up limit
         for _ in 0..5 {
-            limiter.check_and_record("agent1", "test_action").await.unwrap();
+            limiter
+                .check_and_record("agent1", "test_action")
+                .await
+                .unwrap();
         }
-        assert!(limiter.check_and_record("agent1", "test_action").await.is_err());
+        assert!(
+            limiter
+                .check_and_record("agent1", "test_action")
+                .await
+                .is_err()
+        );
 
         // Clear agent's state
         limiter.clear_agent("agent1").await;
 
         // Should be allowed again
-        assert!(limiter.check_and_record("agent1", "test_action").await.is_ok());
+        assert!(
+            limiter
+                .check_and_record("agent1", "test_action")
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]
@@ -485,11 +546,19 @@ mod tests {
 
         // Unknown action should use default config (100 requests/hour)
         for _ in 0..100 {
-            limiter.check_and_record("agent1", "unknown_action").await.unwrap();
+            limiter
+                .check_and_record("agent1", "unknown_action")
+                .await
+                .unwrap();
         }
 
         // 101st should be blocked
-        assert!(limiter.check_and_record("agent1", "unknown_action").await.is_err());
+        assert!(
+            limiter
+                .check_and_record("agent1", "unknown_action")
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
@@ -498,7 +567,10 @@ mod tests {
 
         // Use up limit
         for _ in 0..5 {
-            limiter.check_and_record("agent1", "test_action").await.unwrap();
+            limiter
+                .check_and_record("agent1", "test_action")
+                .await
+                .unwrap();
         }
 
         // Check retry_after
@@ -591,14 +663,21 @@ mod integration_tests {
 
         // Use up the limit (3 for push action)
         for _ in 0..3 {
-            limiter.check_and_record(&agent_id, "push").await.expect("Should succeed");
+            limiter
+                .check_and_record(&agent_id, "push")
+                .await
+                .expect("Should succeed");
         }
 
         // 4th request should be rate limited
         let result = limiter.check_and_record(&agent_id, "push").await;
         assert!(result.is_err(), "Request exceeding limit should fail");
 
-        if let Err(RateLimitError::RateLimited { action, retry_after }) = result {
+        if let Err(RateLimitError::RateLimited {
+            action,
+            retry_after,
+        }) = result
+        {
             assert_eq!(action, "push", "Error should reference the correct action");
             assert!(retry_after > 0, "retry_after should be positive");
         } else {
@@ -619,7 +698,10 @@ mod integration_tests {
 
         // Use up the limit
         for _ in 0..3 {
-            limiter.check_and_record(&agent_id, "push").await.expect("Should succeed");
+            limiter
+                .check_and_record(&agent_id, "push")
+                .await
+                .expect("Should succeed");
         }
 
         // Check that retry_after is provided and reasonable
@@ -650,7 +732,10 @@ mod integration_tests {
 
         // Agent A uses up their entire limit
         for _ in 0..3 {
-            limiter.check_and_record(&agent_a, "push").await.expect("Agent A should succeed");
+            limiter
+                .check_and_record(&agent_a, "push")
+                .await
+                .expect("Agent A should succeed");
         }
 
         // Agent A should now be rate limited
@@ -688,7 +773,10 @@ mod integration_tests {
 
         // Use up push limit (3 requests)
         for _ in 0..3 {
-            limiter.check_and_record(&agent_id, "push").await.expect("Push should succeed");
+            limiter
+                .check_and_record(&agent_id, "push")
+                .await
+                .expect("Push should succeed");
         }
 
         // Push should now be rate limited
@@ -749,12 +837,18 @@ mod integration_tests {
 
         // Use up the limit
         for _ in 0..2 {
-            limiter.check_and_record(&agent_id, "test_action").await.expect("Should succeed");
+            limiter
+                .check_and_record(&agent_id, "test_action")
+                .await
+                .expect("Should succeed");
         }
 
         // Should be rate limited now
         let result_before = limiter.check_and_record(&agent_id, "test_action").await;
-        assert!(result_before.is_err(), "Should be rate limited before window expires");
+        assert!(
+            result_before.is_err(),
+            "Should be rate limited before window expires"
+        );
 
         // Wait for the window to expire (2 seconds + buffer)
         tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
@@ -782,7 +876,10 @@ mod integration_tests {
 
         // Agent A exhausts push limit
         for _ in 0..3 {
-            limiter.check_and_record(&agent_a, "push").await.expect("Agent A push should succeed");
+            limiter
+                .check_and_record(&agent_a, "push")
+                .await
+                .expect("Agent A push should succeed");
         }
         assert!(limiter.check_and_record(&agent_a, "push").await.is_err());
 
@@ -815,7 +912,10 @@ mod integration_tests {
 
         // Check status multiple times without consuming quota
         for _ in 0..10 {
-            let status = limiter.check_only(&agent_id, "push").await.expect("Check should succeed");
+            let status = limiter
+                .check_only(&agent_id, "push")
+                .await
+                .expect("Check should succeed");
             assert_eq!(status.limit, 3, "Limit should be 3 for push");
             assert_eq!(status.remaining, 3, "Remaining should still be 3");
         }
@@ -826,7 +926,10 @@ mod integration_tests {
 
         // Should still be able to make all 3 requests
         for _ in 0..3 {
-            limiter.check_and_record(&agent_id, "push").await.expect("Should succeed");
+            limiter
+                .check_and_record(&agent_id, "push")
+                .await
+                .expect("Should succeed");
         }
     }
 
@@ -842,14 +945,27 @@ mod integration_tests {
         let agent_id = format!("agent-{}", uuid::Uuid::new_v4());
 
         // Unknown action should use default config (100 requests/hour)
-        let status = limiter.check_only(&agent_id, "unknown_action").await.expect("Check should succeed");
-        assert_eq!(status.limit, 100, "Unknown action should use default limit of 100");
-        assert_eq!(status.remaining, 100, "Unknown action should have full quota");
+        let status = limiter
+            .check_only(&agent_id, "unknown_action")
+            .await
+            .expect("Check should succeed");
+        assert_eq!(
+            status.limit, 100,
+            "Unknown action should use default limit of 100"
+        );
+        assert_eq!(
+            status.remaining, 100,
+            "Unknown action should have full quota"
+        );
 
         // Should be able to make requests with default limit
         for i in 0..10 {
             let result = limiter.check_and_record(&agent_id, "unknown_action").await;
-            assert!(result.is_ok(), "Request {} should succeed with default config", i + 1);
+            assert!(
+                result.is_ok(),
+                "Request {} should succeed with default config",
+                i + 1
+            );
         }
     }
 
@@ -861,7 +977,10 @@ mod integration_tests {
     #[ignore]
     #[tokio::test]
     async fn integration_concurrent_requests_handled() {
-        let limiter = Arc::new(RateLimiterService::with_bucket_size(integration_test_config(), 1));
+        let limiter = Arc::new(RateLimiterService::with_bucket_size(
+            integration_test_config(),
+            1,
+        ));
         let agent_id = format!("agent-{}", uuid::Uuid::new_v4());
 
         // Spawn multiple concurrent requests
@@ -887,7 +1006,10 @@ mod integration_tests {
         }
 
         // With limit of 5, exactly 5 should succeed and 5 should fail
-        assert_eq!(successes, 5, "Exactly 5 requests should succeed (limit is 5)");
+        assert_eq!(
+            successes, 5,
+            "Exactly 5 requests should succeed (limit is 5)"
+        );
         assert_eq!(failures, 5, "Exactly 5 requests should be rate limited");
 
         // Verify final count

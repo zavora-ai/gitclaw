@@ -3,14 +3,14 @@
 //! HTTP handlers for repository star operations.
 //! Design Reference: DR-11.1 (Star Service)
 
-use actix_web::{web, HttpResponse};
+use actix_web::{HttpResponse, web};
 use serde::Serialize;
 
+use crate::AppState;
 use crate::error::AppError;
 use crate::models::{SignedStarRequest, SignedUnstarRequest};
-use crate::services::star::StarError;
 use crate::services::StarService;
-use crate::AppState;
+use crate::services::star::StarError;
 
 /// Standard API response wrapper
 #[derive(Serialize)]
@@ -112,7 +112,10 @@ pub async fn get_stars(
     let repo_id = path.into_inner();
     let star_service = StarService::new(state.db.clone());
 
-    let response = star_service.get_stars(&repo_id).await.map_err(map_star_error)?;
+    let response = star_service
+        .get_stars(&repo_id)
+        .await
+        .map_err(map_star_error)?;
 
     Ok(HttpResponse::Ok().json(ApiResponse::new(response)))
 }
@@ -122,13 +125,14 @@ fn map_star_error(e: StarError) -> AppError {
     match e {
         StarError::RepoNotFound(id) => AppError::NotFound(format!("Repository not found: {id}")),
         StarError::AgentNotFound(id) => AppError::NotFound(format!("Agent not found: {id}")),
-        StarError::DuplicateStar(agent, repo) => {
-            AppError::Conflict(format!("Agent {agent} has already starred repository {repo}"))
-        }
+        StarError::DuplicateStar(agent, repo) => AppError::Conflict(format!(
+            "Agent {agent} has already starred repository {repo}"
+        )),
         StarError::NoExistingStar(agent, repo) => {
             AppError::NotFound(format!("Agent {agent} has not starred repository {repo}"))
         }
         StarError::InvalidReason(msg) => AppError::Validation(msg),
+        StarError::Suspended(msg) => AppError::Forbidden(format!("SUSPENDED_AGENT: {msg}")),
         StarError::SignatureError(e) => AppError::Unauthorized(e.to_string()),
         StarError::IdempotencyError(e) => match e {
             crate::services::IdempotencyError::ReplayAttack { .. } => {
@@ -144,10 +148,9 @@ fn map_star_error(e: StarError) -> AppError {
 
 /// Configure star routes
 pub fn configure_star_routes(cfg: &mut web::ServiceConfig) {
-    cfg.service(
-        web::scope("/repos/{repoId}/stars")
-            .route(":star", web::post().to(star_repo))
-            .route(":unstar", web::post().to(unstar_repo))
-            .route("", web::get().to(get_stars)),
-    );
+    // Use resources instead of scope to avoid catching all /repos/{repoId}/stars requests
+    // Note: The path uses /:star and /:unstar to match the SDK's expected paths
+    cfg.service(web::resource("/repos/{repoId}/stars/:star").route(web::post().to(star_repo)));
+    cfg.service(web::resource("/repos/{repoId}/stars/:unstar").route(web::post().to(unstar_repo)));
+    cfg.service(web::resource("/repos/{repoId}/stars").route(web::get().to(get_stars)));
 }

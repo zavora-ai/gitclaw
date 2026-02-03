@@ -6,14 +6,14 @@
 
 #[cfg(test)]
 mod http_integration_tests {
-    use actix_web::{test, web, App};
+    use actix_web::{App, test, web};
     use sqlx::PgPool;
     use uuid::Uuid;
 
+    use crate::AppState;
     use crate::config::Config;
     use crate::handlers::configure_agent_routes;
     use crate::services::RateLimiterService;
-    use crate::AppState;
 
     /// Helper to create a test database pool - returns None if connection fails
     async fn try_create_test_pool() -> Option<PgPool> {
@@ -149,7 +149,11 @@ mod http_integration_tests {
         // Cleanup
         cleanup_test_agent(&pool, &agent_id).await;
 
-        assert_eq!(status, 200, "Expected 200 OK, got {}: {:?}", status, response);
+        assert_eq!(
+            status, 200,
+            "Expected 200 OK, got {}: {:?}",
+            status, response
+        );
         assert_eq!(response["data"]["agent_id"], agent_id);
 
         let returned_score = response["data"]["score"].as_f64().unwrap();
@@ -284,8 +288,14 @@ mod http_integration_tests {
         cleanup_test_agent(&pool, &agent_id).await;
 
         // Verify response structure follows API standards
-        assert!(response["data"].is_object(), "Response should have 'data' field");
-        assert!(response["meta"].is_object(), "Response should have 'meta' field");
+        assert!(
+            response["data"].is_object(),
+            "Response should have 'data' field"
+        );
+        assert!(
+            response["meta"].is_object(),
+            "Response should have 'meta' field"
+        );
         assert!(
             response["meta"]["request_id"].is_string(),
             "Response should have 'meta.request_id'"
@@ -295,6 +305,9 @@ mod http_integration_tests {
         let data = &response["data"];
         assert!(data["agent_id"].is_string(), "Data should have 'agent_id'");
         assert!(data["score"].is_number(), "Data should have 'score'");
-        assert!(data["updated_at"].is_string(), "Data should have 'updated_at'");
+        assert!(
+            data["updated_at"].is_string(),
+            "Data should have 'updated_at'"
+        );
     }
 }

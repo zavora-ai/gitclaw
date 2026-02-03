@@ -846,11 +846,10 @@ impl CiService {
 
     /// Get logs for a CI run
     pub async fn get_run_logs(&self, run_id: &str) -> Result<Option<String>, CiError> {
-        let logs: Option<String> =
-            sqlx::query_scalar("SELECT logs FROM ci_runs WHERE run_id = $1")
-                .bind(run_id)
-                .fetch_optional(&self.pool)
-                .await?;
+        let logs: Option<String> = sqlx::query_scalar("SELECT logs FROM ci_runs WHERE run_id = $1")
+            .bind(run_id)
+            .fetch_optional(&self.pool)
+            .await?;
         Ok(logs)
     }
 
@@ -988,15 +987,26 @@ timeout: 300
     #[test]
     fn test_sandbox_config_default_no_network() {
         let config = SandboxConfig::default();
-        assert!(config.allowed_hosts.is_empty(), "Sandbox should have no network access by default");
+        assert!(
+            config.allowed_hosts.is_empty(),
+            "Sandbox should have no network access by default"
+        );
     }
 
     #[test]
     fn test_resource_limits_default_values() {
         let limits = ResourceLimits::default();
-        assert_eq!(limits.memory, 512 * 1024 * 1024, "Default memory should be 512MB");
+        assert_eq!(
+            limits.memory,
+            512 * 1024 * 1024,
+            "Default memory should be 512MB"
+        );
         assert_eq!(limits.cpu_shares, 1024, "Default CPU shares should be 1024");
-        assert_eq!(limits.disk, 1024 * 1024 * 1024, "Default disk should be 1GB");
+        assert_eq!(
+            limits.disk,
+            1024 * 1024 * 1024,
+            "Default disk should be 1GB"
+        );
     }
 }
 
@@ -1195,7 +1205,9 @@ mod integration_tests {
         let commit_sha = format!("{:040x}", rand::random::<u128>());
 
         // Trigger CI for the PR
-        let result = ci_service.trigger_for_pr(&repo_id, &pr_id, &commit_sha).await;
+        let result = ci_service
+            .trigger_for_pr(&repo_id, &pr_id, &commit_sha)
+            .await;
 
         // Cleanup
         cleanup_test_data(&pool, &agent_id, &repo_id, &pr_id).await;
@@ -1229,17 +1241,25 @@ mod integration_tests {
 
         // First trigger (initial PR)
         let commit_sha1 = format!("{:040x}", rand::random::<u128>());
-        let result1 = ci_service.trigger_for_pr(&repo_id, &pr_id, &commit_sha1).await;
+        let result1 = ci_service
+            .trigger_for_pr(&repo_id, &pr_id, &commit_sha1)
+            .await;
         assert!(result1.is_ok(), "First CI trigger should succeed");
 
         // Second trigger (PR update with new commit)
         let commit_sha2 = format!("{:040x}", rand::random::<u128>());
-        let result2 = ci_service.trigger_for_pr(&repo_id, &pr_id, &commit_sha2).await;
+        let result2 = ci_service
+            .trigger_for_pr(&repo_id, &pr_id, &commit_sha2)
+            .await;
 
         // Cleanup
         cleanup_test_data(&pool, &agent_id, &repo_id, &pr_id).await;
 
-        assert!(result2.is_ok(), "Second CI trigger should succeed: {:?}", result2);
+        assert!(
+            result2.is_ok(),
+            "Second CI trigger should succeed: {:?}",
+            result2
+        );
         let run_id1 = result1.unwrap();
         let run_id2 = result2.unwrap();
         assert_ne!(run_id1, run_id2, "Each trigger should create a new run");
@@ -1269,14 +1289,22 @@ mod integration_tests {
         let commit_sha = format!("{:040x}", rand::random::<u128>());
 
         // Trigger CI
-        let run_id = ci_service.trigger_for_pr(&repo_id, &pr_id, &commit_sha).await
+        let run_id = ci_service
+            .trigger_for_pr(&repo_id, &pr_id, &commit_sha)
+            .await
             .expect("CI trigger should succeed");
 
         // Verify initial status is pending
-        let run = ci_service.get_run(&run_id).await
+        let run = ci_service
+            .get_run(&run_id)
+            .await
             .expect("Get run should succeed")
             .expect("Run should exist");
-        assert_eq!(run.status, CiRunStatus::Pending, "Initial status should be pending");
+        assert_eq!(
+            run.status,
+            CiRunStatus::Pending,
+            "Initial status should be pending"
+        );
 
         // Execute the run (this transitions through running to passed/failed)
         let result = ci_service.execute_run(&run_id).await;
@@ -1287,7 +1315,10 @@ mod integration_tests {
         assert!(result.is_ok(), "Execute run should succeed: {:?}", result);
         let pipeline_result = result.unwrap();
         assert!(
-            matches!(pipeline_result.status, CiRunStatus::Passed | CiRunStatus::Failed),
+            matches!(
+                pipeline_result.status,
+                CiRunStatus::Passed | CiRunStatus::Failed
+            ),
             "Final status should be passed or failed"
         );
     }
@@ -1316,9 +1347,13 @@ mod integration_tests {
         let commit_sha = format!("{:040x}", rand::random::<u128>());
 
         // Trigger and execute CI
-        let run_id = ci_service.trigger_for_pr(&repo_id, &pr_id, &commit_sha).await
+        let run_id = ci_service
+            .trigger_for_pr(&repo_id, &pr_id, &commit_sha)
+            .await
             .expect("CI trigger should succeed");
-        let _ = ci_service.execute_run(&run_id).await
+        let _ = ci_service
+            .execute_run(&run_id)
+            .await
             .expect("Execute run should succeed");
 
         // Retrieve logs
@@ -1332,7 +1367,10 @@ mod integration_tests {
         assert!(logs.is_some(), "Logs should exist");
         let logs = logs.unwrap();
         assert!(!logs.is_empty(), "Logs should not be empty");
-        assert!(logs.contains("Step:"), "Logs should contain step information");
+        assert!(
+            logs.contains("Step:"),
+            "Logs should contain step information"
+        );
     }
 
     // =========================================================================
@@ -1345,12 +1383,12 @@ mod integration_tests {
     async fn integration_sandbox_isolation_no_network() {
         // This test verifies that the sandbox configuration defaults to no network access
         let config = SandboxConfig::default();
-        
+
         assert!(
             config.allowed_hosts.is_empty(),
             "Sandbox should have no allowed hosts by default (no network access)"
         );
-        
+
         // Verify resource limits are set
         assert!(config.resources.memory > 0, "Memory limit should be set");
         assert!(config.resources.cpu_shares > 0, "CPU shares should be set");
@@ -1381,11 +1419,15 @@ mod integration_tests {
         let commit_sha = format!("{:040x}", rand::random::<u128>());
 
         // Trigger CI
-        let run_id = ci_service.trigger_for_pr(&repo_id, &pr_id, &commit_sha).await
+        let run_id = ci_service
+            .trigger_for_pr(&repo_id, &pr_id, &commit_sha)
+            .await
             .expect("CI trigger should succeed");
 
         // Get the run and verify config has resource limits
-        let run = ci_service.get_run(&run_id).await
+        let run = ci_service
+            .get_run(&run_id)
+            .await
             .expect("Get run should succeed")
             .expect("Run should exist");
 
@@ -1393,8 +1435,14 @@ mod integration_tests {
         cleanup_test_data(&pool, &agent_id, &repo_id, &pr_id).await;
 
         // Verify resource limits are configured
-        assert!(run.config.resources.memory > 0, "Memory limit should be configured");
-        assert!(run.config.resources.cpu_shares > 0, "CPU shares should be configured");
+        assert!(
+            run.config.resources.memory > 0,
+            "Memory limit should be configured"
+        );
+        assert!(
+            run.config.resources.cpu_shares > 0,
+            "CPU shares should be configured"
+        );
         assert!(run.config.timeout > 0, "Timeout should be configured");
     }
 
@@ -1422,28 +1470,39 @@ mod integration_tests {
         let commit_sha = format!("{:040x}", rand::random::<u128>());
 
         // Trigger and execute CI
-        let run_id = ci_service.trigger_for_pr(&repo_id, &pr_id, &commit_sha).await
+        let run_id = ci_service
+            .trigger_for_pr(&repo_id, &pr_id, &commit_sha)
+            .await
             .expect("CI trigger should succeed");
-        let result = ci_service.execute_run(&run_id).await
+        let result = ci_service
+            .execute_run(&run_id)
+            .await
             .expect("Execute run should succeed");
 
         // Check PR CI status
-        let pr_ci_status: CiStatus = sqlx::query_scalar(
-            "SELECT ci_status FROM pull_requests WHERE pr_id = $1"
-        )
-        .bind(&pr_id)
-        .fetch_one(&pool)
-        .await
-        .expect("Should get PR CI status");
+        let pr_ci_status: CiStatus =
+            sqlx::query_scalar("SELECT ci_status FROM pull_requests WHERE pr_id = $1")
+                .bind(&pr_id)
+                .fetch_one(&pool)
+                .await
+                .expect("Should get PR CI status");
 
         // Cleanup
         cleanup_test_data(&pool, &agent_id, &repo_id, &pr_id).await;
 
         // If pipeline passed, PR should be marked as CI passed
         if result.status == CiRunStatus::Passed {
-            assert_eq!(pr_ci_status, CiStatus::Passed, "PR should be marked CI-approved when pipeline passes");
+            assert_eq!(
+                pr_ci_status,
+                CiStatus::Passed,
+                "PR should be marked CI-approved when pipeline passes"
+            );
         } else {
-            assert_eq!(pr_ci_status, CiStatus::Failed, "PR should be marked CI-failed when pipeline fails");
+            assert_eq!(
+                pr_ci_status,
+                CiStatus::Failed,
+                "PR should be marked CI-failed when pipeline fails"
+            );
         }
     }
 
@@ -1471,11 +1530,15 @@ mod integration_tests {
         let commit_sha = format!("{:040x}", rand::random::<u128>());
 
         // Trigger CI
-        let run_id = ci_service.trigger_for_pr(&repo_id, &pr_id, &commit_sha).await
+        let run_id = ci_service
+            .trigger_for_pr(&repo_id, &pr_id, &commit_sha)
+            .await
             .expect("CI trigger should succeed");
 
         // Get the run and verify config was loaded
-        let run = ci_service.get_run(&run_id).await
+        let run = ci_service
+            .get_run(&run_id)
+            .await
             .expect("Get run should succeed")
             .expect("Run should exist");
 

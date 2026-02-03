@@ -8,7 +8,7 @@ use std::time::Duration;
 use tokio::sync::watch;
 use tracing::{error, info};
 
-use crate::services::{TrendingService, ReputationService};
+use crate::services::{ReputationService, TrendingService};
 
 /// Configuration for the trending aggregation job
 #[derive(Debug, Clone)]

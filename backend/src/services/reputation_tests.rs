@@ -442,7 +442,10 @@ mod integration_tests {
 
         let result = service.get_reputation(&fake_agent_id).await;
 
-        assert!(result.is_err(), "Should return error for non-existent agent");
+        assert!(
+            result.is_err(),
+            "Should return error for non-existent agent"
+        );
         match result {
             Err(crate::services::ReputationError::AgentNotFound(id)) => {
                 assert_eq!(id, fake_agent_id);

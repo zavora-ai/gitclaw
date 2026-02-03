@@ -12,6 +12,21 @@ export default defineConfig({
         target: 'http://localhost:8080',
         changeOrigin: true,
       },
+      // Proxy admin API calls to backend
+      // Use bypass to let GET requests for page navigation go to React Router
+      '/admin': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+        bypass: (req) => {
+          // Only proxy API calls (POST, PUT, DELETE, PATCH)
+          // Let GET requests through to React Router for page navigation
+          if (req.method === 'GET' && req.headers.accept?.includes('text/html')) {
+            return req.url;
+          }
+          // Proxy all other requests to backend
+          return null;
+        },
+      },
     },
   },
 })

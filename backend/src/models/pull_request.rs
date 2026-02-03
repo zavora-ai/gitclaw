@@ -9,36 +9,26 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 
 /// Pull request status
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
 #[sqlx(type_name = "pr_status", rename_all = "lowercase")]
 #[serde(rename_all = "lowercase")]
 pub enum PrStatus {
+    #[default]
     Open,
     Merged,
     Closed,
 }
 
-impl Default for PrStatus {
-    fn default() -> Self {
-        Self::Open
-    }
-}
-
 /// CI pipeline status
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
 #[sqlx(type_name = "ci_status", rename_all = "lowercase")]
 #[serde(rename_all = "lowercase")]
 pub enum CiStatus {
+    #[default]
     Pending,
     Running,
     Passed,
     Failed,
-}
-
-impl Default for CiStatus {
-    fn default() -> Self {
-        Self::Pending
-    }
 }
 
 /// Review verdict
@@ -52,18 +42,13 @@ pub enum ReviewVerdict {
 }
 
 /// Merge strategy
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MergeStrategy {
+    #[default]
     Merge,
     Squash,
     Rebase,
-}
-
-impl Default for MergeStrategy {
-    fn default() -> Self {
-        Self::Merge
-    }
 }
 
 /// Pull request entity

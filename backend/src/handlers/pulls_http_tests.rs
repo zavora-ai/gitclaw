@@ -6,27 +6,27 @@
 
 #[cfg(test)]
 mod http_integration_tests {
-    use actix_web::{test, web, App};
-    use base64::engine::general_purpose::STANDARD;
+    use actix_web::{App, test, web};
     use base64::Engine;
+    use base64::engine::general_purpose::STANDARD;
     use chrono::Utc;
     use ed25519_dalek::{Signer, SigningKey};
     use rand::rngs::OsRng;
     use sha2::{Digest, Sha256};
     use sqlx::PgPool;
 
+    use crate::AppState;
     use crate::config::Config;
     use crate::handlers::configure_pull_routes;
     use crate::models::AccessRole;
-    use crate::services::{RateLimiterService, SignatureValidator};
     use crate::services::signature::SignatureEnvelope;
-    use crate::AppState;
+    use crate::services::{RateLimiterService, SignatureValidator};
 
     /// Helper to create a test database pool - returns None if connection fails
     async fn try_create_test_pool() -> Option<PgPool> {
         let _ = dotenvy::from_filename("backend/.env");
         let _ = dotenvy::dotenv();
-        
+
         let database_url = match std::env::var("DATABASE_URL") {
             Ok(url) => url,
             Err(_) => return None,
@@ -50,7 +50,9 @@ mod http_integration_tests {
     /// Sign an envelope with Ed25519
     fn sign_envelope(signing_key: &SigningKey, envelope: &SignatureEnvelope) -> String {
         let validator = SignatureValidator::default();
-        let canonical = validator.canonicalize(envelope).expect("canonicalize failed");
+        let canonical = validator
+            .canonicalize(envelope)
+            .expect("canonicalize failed");
         let message_hash = Sha256::digest(canonical.as_bytes());
         let signature = signing_key.sign(&message_hash);
         STANDARD.encode(signature.to_bytes())
@@ -92,10 +94,7 @@ mod http_integration_tests {
     }
 
     /// Create a test repository with branches
-    async fn create_test_repo_with_branches(
-        pool: &PgPool,
-        owner_id: &str,
-    ) -> String {
+    async fn create_test_repo_with_branches(pool: &PgPool, owner_id: &str) -> String {
         let repo_id = uuid::Uuid::new_v4().to_string();
         let repo_name = format!("test-repo-{}", uuid::Uuid::new_v4());
 
@@ -115,7 +114,7 @@ mod http_integration_tests {
 
         // Initialize star counts
         sqlx::query(
-            "INSERT INTO repo_star_counts (repo_id, stars, updated_at) VALUES ($1, 0, NOW())"
+            "INSERT INTO repo_star_counts (repo_id, stars, updated_at) VALUES ($1, 0, NOW())",
         )
         .bind(&repo_id)
         .execute(pool)
@@ -135,7 +134,7 @@ mod http_integration_tests {
 
         // Create main branch ref
         sqlx::query(
-            "INSERT INTO repo_refs (repo_id, ref_name, oid, updated_at) VALUES ($1, $2, $3, NOW())"
+            "INSERT INTO repo_refs (repo_id, ref_name, oid, updated_at) VALUES ($1, $2, $3, NOW())",
         )
         .bind(&repo_id)
         .bind("refs/heads/main")
@@ -146,7 +145,7 @@ mod http_integration_tests {
 
         // Create feature branch ref
         sqlx::query(
-            "INSERT INTO repo_refs (repo_id, ref_name, oid, updated_at) VALUES ($1, $2, $3, NOW())"
+            "INSERT INTO repo_refs (repo_id, ref_name, oid, updated_at) VALUES ($1, $2, $3, NOW())",
         )
         .bind(&repo_id)
         .bind("refs/heads/feature")
@@ -263,8 +262,9 @@ mod http_integration_tests {
         let app = test::init_service(
             App::new()
                 .app_data(app_state)
-                .service(web::scope("/v1").configure(configure_pull_routes))
-        ).await;
+                .service(web::scope("/v1").configure(configure_pull_routes)),
+        )
+        .await;
 
         let body = serde_json::json!({
             "repoId": repo_id,
@@ -309,7 +309,11 @@ mod http_integration_tests {
         cleanup_test_repo(&pool, &repo_id).await;
         cleanup_test_agent(&pool, &agent_id).await;
 
-        assert_eq!(status, 201, "Expected 201 Created, got {}: {:?}", status, response);
+        assert_eq!(
+            status, 201,
+            "Expected 201 Created, got {}: {:?}",
+            status, response
+        );
         assert_eq!(response["data"]["sourceBranch"], "feature");
         assert_eq!(response["data"]["targetBranch"], "main");
         assert_eq!(response["data"]["title"], "Test PR");
@@ -339,8 +343,9 @@ mod http_integration_tests {
         let app = test::init_service(
             App::new()
                 .app_data(app_state)
-                .service(web::scope("/v1").configure(configure_pull_routes))
-        ).await;
+                .service(web::scope("/v1").configure(configure_pull_routes)),
+        )
+        .await;
 
         let body = serde_json::json!({
             "repoId": repo_id,
@@ -382,7 +387,11 @@ mod http_integration_tests {
         cleanup_test_repo(&pool, &repo_id).await;
         cleanup_test_agent(&pool, &agent_id).await;
 
-        assert_eq!(status, 400, "Expected 400 Bad Request for non-existent branch, got {}", status);
+        assert_eq!(
+            status, 400,
+            "Expected 400 Bad Request for non-existent branch, got {}",
+            status
+        );
     }
 
     // =========================================================================
@@ -423,8 +432,9 @@ mod http_integration_tests {
         let app = test::init_service(
             App::new()
                 .app_data(app_state)
-                .service(web::scope("/v1").configure(configure_pull_routes))
-        ).await;
+                .service(web::scope("/v1").configure(configure_pull_routes)),
+        )
+        .await;
 
         let nonce = uuid::Uuid::new_v4().to_string();
         let body = serde_json::json!({
@@ -468,7 +478,11 @@ mod http_integration_tests {
         cleanup_test_agent(&pool, &author_id).await;
         cleanup_test_agent(&pool, &reviewer_id).await;
 
-        assert_eq!(status, 201, "Expected 201 Created, got {}: {:?}", status, response);
+        assert_eq!(
+            status, 201,
+            "Expected 201 Created, got {}: {:?}",
+            status, response
+        );
         assert_eq!(response["data"]["verdict"], "approve");
         assert_eq!(response["data"]["body"], "LGTM!");
         assert_eq!(response["data"]["reviewerId"], reviewer_id);
@@ -511,8 +525,9 @@ mod http_integration_tests {
         let app = test::init_service(
             App::new()
                 .app_data(app_state)
-                .service(web::scope("/v1").configure(configure_pull_routes))
-        ).await;
+                .service(web::scope("/v1").configure(configure_pull_routes)),
+        )
+        .await;
 
         let nonce = uuid::Uuid::new_v4().to_string();
         let body = serde_json::json!({
@@ -553,7 +568,11 @@ mod http_integration_tests {
         cleanup_test_repo(&pool, &repo_id).await;
         cleanup_test_agent(&pool, &author_id).await;
 
-        assert_eq!(status, 400, "Expected 400 Bad Request for self-approval, got {}", status);
+        assert_eq!(
+            status, 400,
+            "Expected 400 Bad Request for self-approval, got {}",
+            status
+        );
     }
 
     // =========================================================================
@@ -609,8 +628,9 @@ mod http_integration_tests {
         let app = test::init_service(
             App::new()
                 .app_data(app_state)
-                .service(web::scope("/v1").configure(configure_pull_routes))
-        ).await;
+                .service(web::scope("/v1").configure(configure_pull_routes)),
+        )
+        .await;
 
         let nonce = uuid::Uuid::new_v4().to_string();
         let body = serde_json::json!({
@@ -652,7 +672,11 @@ mod http_integration_tests {
         cleanup_test_agent(&pool, &author_id).await;
         cleanup_test_agent(&pool, &reviewer_id).await;
 
-        assert_eq!(status, 200, "Expected 200 OK, got {}: {:?}", status, response);
+        assert_eq!(
+            status, 200,
+            "Expected 200 OK, got {}: {:?}",
+            status, response
+        );
         assert_eq!(response["data"]["mergeStrategy"], "merge");
         assert!(response["data"]["mergeCommitOid"].as_str().is_some());
     }
@@ -694,8 +718,9 @@ mod http_integration_tests {
         let app = test::init_service(
             App::new()
                 .app_data(app_state)
-                .service(web::scope("/v1").configure(configure_pull_routes))
-        ).await;
+                .service(web::scope("/v1").configure(configure_pull_routes)),
+        )
+        .await;
 
         let nonce = uuid::Uuid::new_v4().to_string();
         let body = serde_json::json!({
@@ -735,7 +760,11 @@ mod http_integration_tests {
         cleanup_test_agent(&pool, &author_id).await;
 
         // NotApproved maps to 400 Validation error
-        assert_eq!(status, 400, "Expected 400 Bad Request for merge without approval, got {}", status);
+        assert_eq!(
+            status, 400,
+            "Expected 400 Bad Request for merge without approval, got {}",
+            status
+        );
     }
 
     // =========================================================================
@@ -790,8 +819,9 @@ mod http_integration_tests {
         let app = test::init_service(
             App::new()
                 .app_data(app_state)
-                .service(web::scope("/v1").configure(configure_pull_routes))
-        ).await;
+                .service(web::scope("/v1").configure(configure_pull_routes)),
+        )
+        .await;
 
         let nonce = uuid::Uuid::new_v4().to_string();
         let body = serde_json::json!({
@@ -833,7 +863,11 @@ mod http_integration_tests {
         cleanup_test_agent(&pool, &author_id).await;
         cleanup_test_agent(&pool, &reviewer_id).await;
 
-        assert_eq!(status, 200, "Expected 200 OK for squash merge, got {}: {:?}", status, response);
+        assert_eq!(
+            status, 200,
+            "Expected 200 OK for squash merge, got {}: {:?}",
+            status, response
+        );
         assert_eq!(response["data"]["mergeStrategy"], "squash");
     }
 
@@ -860,8 +894,9 @@ mod http_integration_tests {
         let app = test::init_service(
             App::new()
                 .app_data(app_state)
-                .service(web::scope("/v1").configure(configure_pull_routes))
-        ).await;
+                .service(web::scope("/v1").configure(configure_pull_routes)),
+        )
+        .await;
 
         // Create PR
         let pr_nonce = uuid::Uuid::new_v4().to_string();
@@ -906,14 +941,17 @@ mod http_integration_tests {
 
         // Check audit event for PR creation
         let pr_audit: Option<String> = sqlx::query_scalar(
-            "SELECT action FROM audit_log WHERE resource_id = $1 AND action = 'pr_create'"
+            "SELECT action FROM audit_log WHERE resource_id = $1 AND action = 'pr_create'",
         )
         .bind(pr_id)
         .fetch_optional(&pool)
         .await
         .expect("Query should succeed");
 
-        assert!(pr_audit.is_some(), "Audit event should be recorded for PR creation");
+        assert!(
+            pr_audit.is_some(),
+            "Audit event should be recorded for PR creation"
+        );
 
         // Submit review
         let review_nonce = uuid::Uuid::new_v4().to_string();
@@ -948,18 +986,25 @@ mod http_integration_tests {
             .to_request();
 
         let review_resp = test::call_service(&app, review_req).await;
-        assert_eq!(review_resp.status(), 201, "Review submission should succeed");
+        assert_eq!(
+            review_resp.status(),
+            201,
+            "Review submission should succeed"
+        );
 
         // Check audit event for review
         let review_audit_count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM audit_log WHERE action = 'pr_review' AND agent_id = $1"
+            "SELECT COUNT(*) FROM audit_log WHERE action = 'pr_review' AND agent_id = $1",
         )
         .bind(&reviewer_id)
         .fetch_one(&pool)
         .await
         .expect("Query should succeed");
 
-        assert!(review_audit_count > 0, "Audit event should be recorded for review");
+        assert!(
+            review_audit_count > 0,
+            "Audit event should be recorded for review"
+        );
 
         // Cleanup
         cleanup_idempotency(&pool, &author_id, &pr_nonce).await;
@@ -1007,8 +1052,9 @@ mod http_integration_tests {
         let app = test::init_service(
             App::new()
                 .app_data(app_state)
-                .service(web::scope("/v1").configure(configure_pull_routes))
-        ).await;
+                .service(web::scope("/v1").configure(configure_pull_routes)),
+        )
+        .await;
 
         // Check PR info before review - should not be approved
         let get_req = test::TestRequest::get()
@@ -1017,7 +1063,10 @@ mod http_integration_tests {
         let get_resp = test::call_service(&app, get_req).await;
         let get_body = test::read_body(get_resp).await;
         let pr_info: serde_json::Value = serde_json::from_slice(&get_body).unwrap();
-        assert_eq!(pr_info["data"]["isApproved"], false, "PR should not be approved initially");
+        assert_eq!(
+            pr_info["data"]["isApproved"], false,
+            "PR should not be approved initially"
+        );
 
         // Submit approval review
         let nonce = uuid::Uuid::new_v4().to_string();
@@ -1067,7 +1116,10 @@ mod http_integration_tests {
         cleanup_test_agent(&pool, &author_id).await;
         cleanup_test_agent(&pool, &reviewer_id).await;
 
-        assert_eq!(pr_info2["data"]["isApproved"], true, "PR should be approved after review");
+        assert_eq!(
+            pr_info2["data"]["isApproved"], true,
+            "PR should be approved after review"
+        );
     }
 
     // =========================================================================
@@ -1093,8 +1145,9 @@ mod http_integration_tests {
         let app = test::init_service(
             App::new()
                 .app_data(app_state)
-                .service(web::scope("/v1").configure(configure_pull_routes))
-        ).await;
+                .service(web::scope("/v1").configure(configure_pull_routes)),
+        )
+        .await;
 
         let body = serde_json::json!({
             "repoId": repo_id,
@@ -1138,12 +1191,28 @@ mod http_integration_tests {
         cleanup_test_repo(&pool, &repo_id).await;
         cleanup_test_agent(&pool, &agent_id).await;
 
-        assert_eq!(status, 201, "Expected 201 Created, got {}: {:?}", status, response);
+        assert_eq!(
+            status, 201,
+            "Expected 201 Created, got {}: {:?}",
+            status, response
+        );
         // Verify diffStats is present in response
-        assert!(response["data"]["diffStats"].is_object(), "diffStats should be present");
-        assert!(response["data"]["diffStats"]["filesChanged"].is_number(), "filesChanged should be a number");
-        assert!(response["data"]["diffStats"]["insertions"].is_number(), "insertions should be a number");
-        assert!(response["data"]["diffStats"]["deletions"].is_number(), "deletions should be a number");
+        assert!(
+            response["data"]["diffStats"].is_object(),
+            "diffStats should be present"
+        );
+        assert!(
+            response["data"]["diffStats"]["filesChanged"].is_number(),
+            "filesChanged should be a number"
+        );
+        assert!(
+            response["data"]["diffStats"]["insertions"].is_number(),
+            "insertions should be a number"
+        );
+        assert!(
+            response["data"]["diffStats"]["deletions"].is_number(),
+            "deletions should be a number"
+        );
     }
 
     // =========================================================================
@@ -1199,8 +1268,9 @@ mod http_integration_tests {
         let app = test::init_service(
             App::new()
                 .app_data(app_state)
-                .service(web::scope("/v1").configure(configure_pull_routes))
-        ).await;
+                .service(web::scope("/v1").configure(configure_pull_routes)),
+        )
+        .await;
 
         let nonce = uuid::Uuid::new_v4().to_string();
         let body = serde_json::json!({
@@ -1241,7 +1311,11 @@ mod http_integration_tests {
         cleanup_test_agent(&pool, &reviewer_id).await;
 
         // CiNotPassed maps to 400 Validation error
-        assert_eq!(status, 400, "Expected 400 Bad Request for merge with CI not passed, got {}", status);
+        assert_eq!(
+            status, 400,
+            "Expected 400 Bad Request for merge with CI not passed, got {}",
+            status
+        );
     }
 
     // =========================================================================
@@ -1295,8 +1369,9 @@ mod http_integration_tests {
         let app = test::init_service(
             App::new()
                 .app_data(app_state)
-                .service(web::scope("/v1").configure(configure_pull_routes))
-        ).await;
+                .service(web::scope("/v1").configure(configure_pull_routes)),
+        )
+        .await;
 
         let nonce = uuid::Uuid::new_v4().to_string();
         let body = serde_json::json!({
@@ -1338,7 +1413,11 @@ mod http_integration_tests {
         cleanup_test_agent(&pool, &author_id).await;
         cleanup_test_agent(&pool, &reviewer_id).await;
 
-        assert_eq!(status, 200, "Expected 200 OK for rebase merge, got {}: {:?}", status, response);
+        assert_eq!(
+            status, 200,
+            "Expected 200 OK for rebase merge, got {}: {:?}",
+            status, response
+        );
         assert_eq!(response["data"]["mergeStrategy"], "rebase");
     }
 }

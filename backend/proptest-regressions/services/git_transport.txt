@@ -1,0 +1,9 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc c903d2771a94afd1e67bddb5c368ccd3a7d2ea5dd70140b5fbee7c9459fd3131 # shrinks to service = "git-upload-pack"
+cc c6876e28beb0e405f564502f649cdc42ff7e6e931206a9d09cbe6fadae18c5c6 # shrinks to _seed = 0
+cc ba729d10d7e63c4cab591c71defc2705f5a80d5b63c1f4da35201867e79fdc81 # shrinks to garbage = []

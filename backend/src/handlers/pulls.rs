@@ -4,14 +4,14 @@
 //! Requirements: 6.1-6.5, 7.1-7.5, 8.1-8.6
 //! Design: DR-7.1, DR-7.2, DR-7.3
 
-use actix_web::{web, HttpResponse};
+use actix_web::{HttpResponse, web};
 use serde::Serialize;
 
+use crate::AppState;
 use crate::error::AppError;
 use crate::models::{SignedCreatePrRequest, SignedCreateReviewRequest, SignedMergePrRequest};
-use crate::services::pull_request::PullRequestError;
 use crate::services::PullRequestService;
-use crate::AppState;
+use crate::services::pull_request::PullRequestError;
 
 /// Standard API response wrapper
 #[derive(Serialize)]
@@ -150,10 +150,7 @@ pub async fn get_reviews(
     let pr_service = PullRequestService::new(state.db.clone());
 
     // First verify the PR exists and belongs to the repo
-    let pr = pr_service
-        .get_pr(&path.pr_id)
-        .await
-        .map_err(map_pr_error)?;
+    let pr = pr_service.get_pr(&path.pr_id).await.map_err(map_pr_error)?;
 
     match pr {
         Some(pr) if pr.repo_id == path.repo_id => {
@@ -205,8 +202,12 @@ pub async fn merge_pr(
 /// Map pull request errors to application errors
 fn map_pr_error(e: PullRequestError) -> AppError {
     match e {
-        PullRequestError::PrNotFound(id) => AppError::NotFound(format!("Pull request not found: {id}")),
-        PullRequestError::RepoNotFound(id) => AppError::NotFound(format!("Repository not found: {id}")),
+        PullRequestError::PrNotFound(id) => {
+            AppError::NotFound(format!("Pull request not found: {id}"))
+        }
+        PullRequestError::RepoNotFound(id) => {
+            AppError::NotFound(format!("Repository not found: {id}"))
+        }
         PullRequestError::AgentNotFound(id) => AppError::NotFound(format!("Agent not found: {id}")),
         PullRequestError::BranchNotFound(name) => {
             AppError::Validation(format!("Branch not found: {name}"))
@@ -223,6 +224,7 @@ fn map_pr_error(e: PullRequestError) -> AppError {
         PullRequestError::AlreadyMerged => AppError::Conflict("PR already merged".to_string()),
         PullRequestError::PrClosed => AppError::Validation("PR is closed".to_string()),
         PullRequestError::InvalidState(msg) => AppError::Validation(msg),
+        PullRequestError::Suspended(msg) => AppError::Forbidden(format!("SUSPENDED_AGENT: {msg}")),
         PullRequestError::SignatureError(e) => AppError::Unauthorized(e.to_string()),
         PullRequestError::IdempotencyError(e) => match e {
             crate::services::IdempotencyError::ReplayAttack { .. } => {
@@ -237,12 +239,15 @@ fn map_pr_error(e: PullRequestError) -> AppError {
 
 /// Configure pull request routes
 pub fn configure_pull_routes(cfg: &mut web::ServiceConfig) {
+    // Use resources instead of scope to avoid catching all /repos/{repo_id}/pulls requests
+    cfg.service(web::resource("/repos/{repo_id}/pulls").route(web::post().to(create_pr)));
+    cfg.service(web::resource("/repos/{repo_id}/pulls/{pr_id}").route(web::get().to(get_pr)));
     cfg.service(
-        web::scope("/repos/{repo_id}/pulls")
-            .route("", web::post().to(create_pr))
-            .route("/{pr_id}", web::get().to(get_pr))
-            .route("/{pr_id}/reviews", web::post().to(submit_review))
-            .route("/{pr_id}/reviews", web::get().to(get_reviews))
-            .route("/{pr_id}/merge", web::post().to(merge_pr)),
+        web::resource("/repos/{repo_id}/pulls/{pr_id}/reviews")
+            .route(web::post().to(submit_review))
+            .route(web::get().to(get_reviews)),
+    );
+    cfg.service(
+        web::resource("/repos/{repo_id}/pulls/{pr_id}/merge").route(web::post().to(merge_pr)),
     );
 }

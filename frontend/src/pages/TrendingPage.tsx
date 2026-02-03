@@ -6,7 +6,7 @@ import type { TrendingRepo, TrendingWindow } from '../types/api';
 import * as api from '../services/api';
 
 export function TrendingPage() {
-  const [window, setWindow] = useState<TrendingWindow>('24h');
+  const [timeWindow, setTimeWindow] = useState<TrendingWindow>('24h');
   const [repos, setRepos] = useState<TrendingRepo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -17,7 +17,7 @@ export function TrendingPage() {
       setError(null);
 
       try {
-        const data = await api.getTrendingRepos(window);
+        const data = await api.getTrendingRepos(timeWindow);
         setRepos(data);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load trending repos');
@@ -27,14 +27,18 @@ export function TrendingPage() {
     }
 
     loadTrending();
-  }, [window]);
+  }, [timeWindow]);
+
+  const handleRetry = () => {
+    globalThis.location.reload();
+  };
 
   return (
     <Layout>
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <h1 className="text-3xl font-bold">Trending Repositories</h1>
-          <WindowSelector selected={window} onChange={setWindow} />
+          <WindowSelector selected={timeWindow} onChange={setTimeWindow} />
         </div>
 
         {loading ? (
@@ -43,7 +47,21 @@ export function TrendingPage() {
           </div>
         ) : error ? (
           <div className="text-center py-12">
-            <p className="text-red-400">{error}</p>
+            <div className="bg-gray-800 rounded-lg border border-gray-700 p-8 max-w-md mx-auto">
+              <div className="text-gray-400 mb-4">
+                <svg className="w-12 h-12 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+              </div>
+              <h3 className="text-lg font-medium text-gray-200 mb-2">Unable to load trending</h3>
+              <p className="text-gray-400 text-sm mb-4">{error}</p>
+              <button
+                onClick={handleRetry}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm transition-colors"
+              >
+                Try again
+              </button>
+            </div>
           </div>
         ) : repos.length === 0 ? (
           <div className="text-center py-12">
@@ -52,7 +70,7 @@ export function TrendingPage() {
         ) : (
           <div className="space-y-4">
             {repos.map((repo, index) => (
-              <TrendingRepoCard key={repo.repo_id} repo={repo} rank={index + 1} />
+              <TrendingRepoCard key={repo.repoId} repo={repo} rank={index + 1} />
             ))}
           </div>
         )}
@@ -111,11 +129,11 @@ function TrendingRepoCard({ repo, rank }: TrendingRepoCardProps) {
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-1">
             <Link
-              to={`/repos/${repo.owner_name}/${repo.repo_name}`}
+              to={`/repos/${repo.ownerName}/${repo.name}`}
               className="text-blue-400 hover:underline font-medium text-lg"
             >
-              <span className="text-gray-400">{repo.owner_name}/</span>
-              {repo.repo_name}
+              <span className="text-gray-400">{repo.ownerName}/</span>
+              {repo.name}
             </Link>
           </div>
           {repo.description && (
@@ -124,23 +142,23 @@ function TrendingRepoCard({ repo, rank }: TrendingRepoCardProps) {
           <div className="flex items-center gap-6 text-sm">
             <div className="flex items-center gap-1.5 text-gray-400">
               <StarIcon />
-              <span>{repo.star_count} stars</span>
+              <span>{repo.stars} stars</span>
             </div>
             <div className="flex items-center gap-1.5 text-green-400">
               <TrendingUpIcon />
-              <span>+{repo.stars_delta} this period</span>
+              <span>+{repo.starsDelta} this period</span>
             </div>
             <div className="flex items-center gap-1.5 text-gray-500">
               <ScoreIcon />
-              <span>Score: {repo.weighted_score.toFixed(2)}</span>
+              <span>Score: {repo.weightedScore.toFixed(2)}</span>
             </div>
           </div>
         </div>
 
         {/* Star Button */}
         <StarButton
-          repoId={repo.repo_id}
-          initialCount={repo.star_count}
+          repoId={repo.repoId}
+          initialCount={repo.stars}
           onStar={api.starRepo}
           onUnstar={api.unstarRepo}
         />

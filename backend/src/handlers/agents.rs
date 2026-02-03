@@ -1,10 +1,10 @@
-use actix_web::{web, HttpResponse};
+use actix_web::{HttpResponse, web};
 use serde::Serialize;
 
+use crate::AppState;
 use crate::error::AppError;
 use crate::models::{AgentProfile, RegisterAgentRequest};
 use crate::services::{AgentRegistryService, ReputationService};
-use crate::AppState;
 
 /// Standard API response wrapper
 #[derive(Serialize)]
@@ -30,7 +30,7 @@ impl<T: Serialize> ApiResponse<T> {
 }
 
 /// POST /v1/agents/register
-/// 
+///
 /// Register a new agent on the platform.
 /// This is the only unsigned operation - all subsequent actions require valid signatures.
 pub async fn register_agent(
@@ -38,7 +38,7 @@ pub async fn register_agent(
     body: web::Json<RegisterAgentRequest>,
 ) -> Result<HttpResponse, AppError> {
     let registry = AgentRegistryService::new(state.db.clone());
-    
+
     let response = registry
         .register(body.into_inner())
         .await
@@ -64,7 +64,7 @@ pub async fn register_agent(
 }
 
 /// GET /v1/agents/{agentId}
-/// 
+///
 /// Get agent profile by ID.
 pub async fn get_agent(
     state: web::Data<AppState>,
@@ -72,29 +72,24 @@ pub async fn get_agent(
 ) -> Result<HttpResponse, AppError> {
     let agent_id = path.into_inner();
     let registry = AgentRegistryService::new(state.db.clone());
-    
-    let agent = registry
-        .get_by_id(&agent_id)
-        .await
-        .map_err(|e| match e {
-            crate::services::agent_registry::AgentRegistryError::Database(e) => {
-                AppError::Database(e)
-            }
-            _ => AppError::Internal("Unexpected error".to_string()),
-        })?;
+
+    let agent = registry.get_by_id(&agent_id).await.map_err(|e| match e {
+        crate::services::agent_registry::AgentRegistryError::Database(e) => AppError::Database(e),
+        _ => AppError::Internal("Unexpected error".to_string()),
+    })?;
 
     match agent {
         Some(agent) => {
-            let capabilities: Vec<String> = serde_json::from_value(agent.capabilities.clone())
-                .unwrap_or_default();
-            
+            let capabilities: Vec<String> =
+                serde_json::from_value(agent.capabilities.clone()).unwrap_or_default();
+
             let profile = AgentProfile {
                 agent_id: agent.agent_id,
                 agent_name: agent.agent_name,
                 capabilities,
                 created_at: agent.created_at,
             };
-            
+
             Ok(HttpResponse::Ok().json(ApiResponse::new(profile)))
         }
         None => Err(AppError::NotFound(format!("Agent not found: {agent_id}"))),
@@ -102,7 +97,7 @@ pub async fn get_agent(
 }
 
 /// GET /v1/agents/{agentId}/reputation
-/// 
+///
 /// Get agent reputation score.
 /// Design Reference: DR-13.1
 /// Requirements: 10.4 - Expose reputation scores via API
@@ -112,7 +107,7 @@ pub async fn get_agent_reputation(
 ) -> Result<HttpResponse, AppError> {
     let agent_id = path.into_inner();
     let service = ReputationService::new(state.db.clone());
-    
+
     let reputation = service
         .get_reputation(&agent_id)
         .await
@@ -120,9 +115,7 @@ pub async fn get_agent_reputation(
             crate::services::ReputationError::AgentNotFound(id) => {
                 AppError::NotFound(format!("Agent not found: {id}"))
             }
-            crate::services::ReputationError::Database(e) => {
-                AppError::Database(e)
-            }
+            crate::services::ReputationError::Database(e) => AppError::Database(e),
             _ => AppError::Internal(e.to_string()),
         })?;
 

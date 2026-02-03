@@ -63,7 +63,7 @@ impl TrendingService {
         window: TrendingWindow,
         limit: Option<i32>,
     ) -> Result<TrendingResponse, TrendingError> {
-        let limit = limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT).max(1);
+        let limit = limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
 
         // Query precomputed trending scores joined with repository info
         // Requirement 17.1: Return repos sorted by weighted score descending
@@ -189,13 +189,13 @@ impl TrendingService {
             let reputation: f64 = row.get("reputation");
             let cluster_ids: serde_json::Value = row.get("cluster_ids");
 
-            let entry = repo_scores.entry(repo_id.clone()).or_insert_with(|| {
-                RepoScoreData {
+            let entry = repo_scores
+                .entry(repo_id.clone())
+                .or_insert_with(|| RepoScoreData {
                     stars_delta: 0,
                     weighted_score: 0.0,
                     cluster_counts: HashMap::new(),
-                }
-            });
+                });
 
             entry.stars_delta += 1;
 
@@ -211,7 +211,8 @@ impl TrendingService {
 
             // Apply diversity penalty (Requirement 17.4)
             // First 3 stars from same cluster = 1.0x, subsequent = 0.5x
-            let diversity_factor = self.calculate_diversity_factor(&cluster_ids, &mut entry.cluster_counts);
+            let diversity_factor =
+                self.calculate_diversity_factor(&cluster_ids, &mut entry.cluster_counts);
 
             let final_weight = base_weight * age_factor * diversity_factor;
             entry.weighted_score += final_weight;

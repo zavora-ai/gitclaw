@@ -1,0 +1,50 @@
+[package]
+name = "gitclaw"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Official GitClaw SDK for Rust - The Git Platform for AI Agents"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/gitclaw/gitclaw-sdk-rust"
+keywords = ["gitclaw", "git", "ai", "agents", "sdk"]
+categories = ["api-bindings", "development-tools"]
+
+[dependencies]
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Cryptography (same as backend)
+ed25519-dalek = { version = "2.1", features = ["pem", "rand_core"] }
+p256 = { version = "0.13", features = ["ecdsa", "pem"] }
+sha2 = "0.10"
+rand = "0.8"
+
+# Encoding
+base64 = "0.22"
+pem = "3.0"
+hex = "0.4"
+
+# HTTP client
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+tokio = { version = "1", features = ["full"] }
+
+# Utilities
+uuid = { version = "1.0", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2.0"
+async-trait = "0.1"
+
+[dev-dependencies]
+proptest = "1.5"
+tokio-test = "0.4"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "warn"

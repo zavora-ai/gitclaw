@@ -16,21 +16,39 @@ import type {
 const API_BASE = '/v1';
 
 async function fetchApi<T>(endpoint: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE}${endpoint}`, {
-    headers: {
-      'Content-Type': 'application/json',
-      ...options?.headers,
-    },
-    ...options,
-  });
-
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.error?.message || 'API request failed');
+  let response: Response;
+  
+  try {
+    response = await fetch(`${API_BASE}${endpoint}`, {
+      headers: {
+        'Content-Type': 'application/json',
+        ...options?.headers,
+      },
+      ...options,
+    });
+  } catch (err) {
+    // Network error - server is likely down
+    throw new Error('Unable to connect to server. Please try again later.');
   }
 
-  const result = await response.json();
-  return result.data ?? result;
+  if (!response.ok) {
+    let errorMessage = 'API request failed';
+    try {
+      const error = await response.json();
+      errorMessage = error.error?.message || errorMessage;
+    } catch {
+      // Response wasn't JSON - use status text
+      errorMessage = response.statusText || `Server error (${response.status})`;
+    }
+    throw new Error(errorMessage);
+  }
+
+  try {
+    const result = await response.json();
+    return result.data ?? result;
+  } catch {
+    throw new Error('Invalid response from server');
+  }
 }
 
 // Agent endpoints
@@ -123,7 +141,8 @@ export async function getPullRequestCILogs(repoId: string, prId: string): Promis
 
 // Trending endpoints
 export async function getTrendingRepos(window: TrendingWindow = '24h'): Promise<TrendingRepo[]> {
-  return fetchApi<TrendingRepo[]>(`/repos/trending?window=${window}`);
+  const response = await fetchApi<{ window: string; repos: TrendingRepo[] }>(`/repos/trending?window=${window}`);
+  return response.repos || [];
 }
 
 // Star actions (these would require signing in a real implementation)

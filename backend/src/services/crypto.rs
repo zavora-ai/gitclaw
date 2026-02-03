@@ -29,13 +29,13 @@ impl CryptoService {
     }
 
     /// Validate a public key string and determine its type.
-    /// 
+    ///
     /// Supported formats:
     /// - Ed25519: Base64-encoded 32-byte key, optionally prefixed with "ed25519:"
     /// - ECDSA: Base64-encoded key, prefixed with "ecdsa:"
     pub fn validate_public_key(&self, public_key: &str) -> Result<KeyType, CryptoError> {
         let (key_type, key_data) = self.parse_key_prefix(public_key)?;
-        
+
         match key_type {
             KeyType::Ed25519 => self.validate_ed25519_key(&key_data),
             KeyType::Ecdsa => self.validate_ecdsa_key(&key_data),
@@ -57,7 +57,7 @@ impl CryptoService {
     /// Validate an Ed25519 public key
     fn validate_ed25519_key(&self, key_data: &str) -> Result<KeyType, CryptoError> {
         use base64::{Engine as _, engine::general_purpose::STANDARD};
-        
+
         let bytes = STANDARD
             .decode(key_data)
             .map_err(|e| CryptoError::InvalidPublicKeyFormat(format!("Invalid base64: {e}")))?;
@@ -74,8 +74,9 @@ impl CryptoService {
             .try_into()
             .map_err(|_| CryptoError::InvalidPublicKeyFormat("Invalid key bytes".to_string()))?;
 
-        VerifyingKey::from_bytes(&bytes_array)
-            .map_err(|e| CryptoError::InvalidPublicKeyFormat(format!("Invalid Ed25519 key: {e}")))?;
+        VerifyingKey::from_bytes(&bytes_array).map_err(|e| {
+            CryptoError::InvalidPublicKeyFormat(format!("Invalid Ed25519 key: {e}"))
+        })?;
 
         Ok(KeyType::Ed25519)
     }
@@ -83,7 +84,7 @@ impl CryptoService {
     /// Validate an ECDSA public key (P-256/secp256k1)
     fn validate_ecdsa_key(&self, key_data: &str) -> Result<KeyType, CryptoError> {
         use base64::{Engine as _, engine::general_purpose::STANDARD};
-        
+
         let bytes = STANDARD
             .decode(key_data)
             .map_err(|e| CryptoError::InvalidPublicKeyFormat(format!("Invalid base64: {e}")))?;
@@ -111,19 +112,19 @@ impl CryptoService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
     use ed25519_dalek::SigningKey;
     use rand::rngs::OsRng;
-    use base64::{Engine as _, engine::general_purpose::STANDARD};
 
     #[test]
     fn test_validate_ed25519_key() {
         let crypto = CryptoService::new();
-        
+
         // Generate a valid Ed25519 key pair
         let signing_key = SigningKey::generate(&mut OsRng);
         let verifying_key = signing_key.verifying_key();
         let public_key = STANDARD.encode(verifying_key.as_bytes());
-        
+
         let result = crypto.validate_public_key(&public_key);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), KeyType::Ed25519);
@@ -132,11 +133,11 @@ mod tests {
     #[test]
     fn test_validate_ed25519_key_with_prefix() {
         let crypto = CryptoService::new();
-        
+
         let signing_key = SigningKey::generate(&mut OsRng);
         let verifying_key = signing_key.verifying_key();
         let public_key = format!("ed25519:{}", STANDARD.encode(verifying_key.as_bytes()));
-        
+
         let result = crypto.validate_public_key(&public_key);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), KeyType::Ed25519);

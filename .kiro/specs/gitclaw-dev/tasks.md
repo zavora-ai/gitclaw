@@ -2,7 +2,7 @@
 
 ## Overview
 
-GitClaw (gitclaw.dev) - GitHub for AI Agents. This implementation plan covers the core platform enabling AI agents to register, create repos, push commits, open PRs, review code, run CI, merge changes, star repos, and build reputation.
+GitClaw (gitclaw.dev) - The Git Platform for AI Agents. This implementation plan covers the core platform enabling AI agents to register, create repos, push commits, open PRs, review code, run CI, merge changes, star repos, and build reputation.
 
 **Tech Stack**: Rust backend (Actix-web), React frontend, PostgreSQL
 
@@ -45,7 +45,7 @@ GitClaw (gitclaw.dev) - GitHub for AI Agents. This implementation plan covers th
     - **Property 1: Agent Registration Uniqueness**
     - **Validates: Requirements 1.1, 1.2** | **Design: DR-1.1**
 
-  - [ ] 2.3 Write HTTP integration tests for Agent Registry
+  - [x] 2.3 Write HTTP integration tests for Agent Registry
     - Test successful agent registration end-to-end via HTTP
     - Test duplicate agent name rejection returns AGENT_NAME_EXISTS (409)
     - Test invalid public key format returns INVALID_PUBLIC_KEY (400)
@@ -118,11 +118,11 @@ GitClaw (gitclaw.dev) - GitHub for AI Agents. This implementation plan covers th
     - Authenticate via X-Agent-Id and X-Signature headers
     - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7, 4.8_ | _Design: DR-4.3 (Git Transport Service)_
 
-  - [ ]* 4.4 Write property test for repo name uniqueness
+  - [x]* 4.4 Write property test for repo name uniqueness
     - **Property 2: Repository Ownership Uniqueness**
     - **Validates: Requirements 2.1, 2.2** | **Design: DR-4.1**
 
-  - [ ]* 4.5 Write property test for clone access control
+  - [x]* 4.5 Write property test for clone access control
     - **Property 3: Clone Access Control**
     - **Validates: Requirements 3.2, 3.3, 18.2** | **Design: DR-4.2**
 
@@ -171,7 +171,7 @@ GitClaw (gitclaw.dev) - GitHub for AI Agents. This implementation plan covers th
     - Test push event recorded in audit_log
     - _Requirements: 5.1, 5.2, 5.3, 5.4, 5.6_ | _Design: DR-5.1_
 
-- [ ] 6. Checkpoint - Core Git operations work
+- [x] 6. Checkpoint - Core Git operations work
   - Verify agent registration, repo creation, clone, push all work end-to-end
   - Test with standard git client commands
 
@@ -370,7 +370,7 @@ GitClaw (gitclaw.dev) - GitHub for AI Agents. This implementation plan covers th
     - **Property 12: Weight Calculation Formula**
     - **Validates: Requirements 17.2** | **Design: DR-12.1**
 
-  - [ ] 12.5 Write HTTP integration tests for Trending Service
+  - [x] 12.5 Write HTTP integration tests for Trending Service
     - Test trending endpoint returns repos sorted by weighted_score DESC
     - Test window parameter validation (1h, 24h, 7d, 30d)
     - Test invalid window parameter returns error
@@ -453,14 +453,14 @@ GitClaw (gitclaw.dev) - GitHub for AI Agents. This implementation plan covers th
   - Emit audit event on drift detection
   - _Requirements: 11.5_ | _Design: DR-14.1 (Audit Service - Reconciliation)_
 
-  - [ ] 14.6.1 Write HTTP integration tests for Reconciliation Jobs
+  - [x] 14.6.1 Write HTTP integration tests for Reconciliation Jobs
     - Test star count reconciliation detects drift
     - Test repo_refs consistency check detects invalid refs
     - Test PR state invariant check detects inconsistencies
     - Test audit event emitted on drift detection
     - _Requirements: 11.5_ | _Design: DR-14.1_
 
-- [ ] 15. Checkpoint - All backend services complete
+- [x] 15. Checkpoint - All backend services complete
   - Full end-to-end test of all workflows
   - Verify all property tests pass
 
@@ -498,8 +498,8 @@ GitClaw (gitclaw.dev) - GitHub for AI Agents. This implementation plan covers th
     - Contribution history (PRs, reviews, merges)
     - _Requirements: 10.4, 16.2_ | _Design: Frontend (React) - Agent Profile_
 
-- [ ] 17. Documentation
-  - [ ] 17.1 Generate API documentation
+- [x] 17. Documentation
+  - [x] 17.1 Generate API documentation
     - OpenAPI/Swagger spec for all endpoints
     - Request/response examples
     - Error code reference
@@ -511,43 +511,43 @@ GitClaw (gitclaw.dev) - GitHub for AI Agents. This implementation plan covers th
     - Git client configuration
     - _Design: Key Design Decisions_
 
-  - [ ] 17.3 Write operator guide
+  - [x] 17.3 Write operator guide
     - Deployment instructions
     - Configuration reference
     - Monitoring and alerting
     - _Design: Overview_
 
-- [ ] 18. Final Checkpoint - All tests pass
+- [x] 18. Final Checkpoint - All tests pass
   - Ensure all property tests and integration tests pass
   - Documentation complete and reviewed
 
-- [ ] 19. End-to-End Workflow Integration Tests
-  - [ ] 19.1 Write full agent lifecycle integration test
+- [x] 19. End-to-End Workflow Integration Tests
+  - [x] 19.1 Write full agent lifecycle integration test
     - Agent registration → repo creation → push → PR → review → merge flow
     - Verify all audit events recorded throughout workflow
     - Verify reputation updated after merge
     - _Requirements: 1.1, 2.1, 5.1, 6.1, 7.1, 8.1, 10.2, 11.1_ | _Design: All_
 
-  - [ ] 19.2 Write collaboration workflow integration test
+  - [x] 19.2 Write collaboration workflow integration test
     - Agent A creates repo → Agent B clones → Agent B pushes to fork → Agent B opens PR
     - Agent A reviews and approves → CI runs → Agent A merges
     - Verify access control enforced throughout
     - _Requirements: 2.1, 3.1, 5.1, 6.1, 7.1, 8.1, 18.2_ | _Design: All_
 
-  - [ ] 19.3 Write star discovery workflow integration test
+  - [x] 19.3 Write star discovery workflow integration test
     - Multiple agents star repos with varying reputation scores
     - Verify trending scores computed correctly with reputation weighting
     - Verify star counts accurate across all repos
     - _Requirements: 14.1, 15.1, 17.1, 17.2_ | _Design: DR-11.1, DR-12.1_
 
-  - [ ] 19.4 Write error handling integration test
+  - [x] 19.4 Write error handling integration test
     - Test all error codes returned correctly (409, 403, 401, 429, 404)
     - Test rate limiting across multiple requests
     - Test signature validation failures
     - Test replay attack detection
     - _Requirements: 12.1, 12.4, 13.1_ | _Design: DR-3.1, DR-10.1_
 
-  - [ ] 19.5 Write concurrent operations integration test
+  - [x] 19.5 Write concurrent operations integration test
     - Multiple agents starring same repo concurrently
     - Multiple agents pushing to same repo concurrently
     - Verify atomic operations and data consistency

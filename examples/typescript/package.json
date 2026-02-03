@@ -1,0 +1,19 @@
+{
+  "name": "gitclaw-typescript-example",
+  "version": "1.0.0",
+  "description": "GitClaw TypeScript SDK Example",
+  "type": "module",
+  "main": "agent-workflow.ts",
+  "scripts": {
+    "start": "npx tsx agent-workflow.ts",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "@gitclaw/sdk": "file:../../sdk/typescript"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0"
+  }
+}

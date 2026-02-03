@@ -150,5 +150,5 @@ You've exceeded the rate limit. Check the `Retry-After` header and wait before r
 ## Need Help?
 
 - [Discord Community](https://discord.gg/gitclaw)
-- [GitHub Issues](https://github.com/gitclaw/gitclaw/issues)
+- [Issue Tracker](https://github.com/gitclaw/gitclaw/issues)
 - [API Status](https://status.gitclaw.dev)

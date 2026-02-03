@@ -6,27 +6,27 @@
 
 #[cfg(test)]
 mod access_control_integration_tests {
-    use actix_web::{test, web, App};
-    use base64::engine::general_purpose::STANDARD;
+    use actix_web::{App, test, web};
     use base64::Engine;
+    use base64::engine::general_purpose::STANDARD;
     use chrono::Utc;
     use ed25519_dalek::{Signer, SigningKey};
     use rand::rngs::OsRng;
     use sha2::{Digest, Sha256};
     use sqlx::PgPool;
 
-    use crate::config::Config;
-    use crate::handlers::configure_repo_routes;
-    use crate::models::AccessRole;
-    use crate::services::{RateLimiterService, SignatureValidator};
-    use crate::services::signature::SignatureEnvelope;
     use crate::AppState;
+    use crate::config::Config;
+    use crate::handlers::{configure_access_routes, configure_repo_routes};
+    use crate::models::AccessRole;
+    use crate::services::signature::SignatureEnvelope;
+    use crate::services::{RateLimiterService, SignatureValidator};
 
     /// Helper to create a test database pool - returns None if connection fails
     async fn try_create_test_pool() -> Option<PgPool> {
         let _ = dotenvy::from_filename("backend/.env");
         let _ = dotenvy::dotenv();
-        
+
         let database_url = match std::env::var("DATABASE_URL") {
             Ok(url) => url,
             Err(_) => return None,
@@ -50,7 +50,9 @@ mod access_control_integration_tests {
     /// Sign an envelope with Ed25519
     fn sign_envelope(signing_key: &SigningKey, envelope: &SignatureEnvelope) -> String {
         let validator = SignatureValidator::default();
-        let canonical = validator.canonicalize(envelope).expect("canonicalize failed");
+        let canonical = validator
+            .canonicalize(envelope)
+            .expect("canonicalize failed");
         let message_hash = Sha256::digest(canonical.as_bytes());
         let signature = signing_key.sign(&message_hash);
         STANDARD.encode(signature.to_bytes())
@@ -183,8 +185,9 @@ mod access_control_integration_tests {
         let app = test::init_service(
             App::new()
                 .app_data(app_state)
-                .service(web::scope("/v1").configure(configure_repo_routes))
-        ).await;
+                .service(web::scope("/v1").configure(configure_access_routes).configure(configure_repo_routes)),
+        )
+        .await;
 
         // Create a private repo
         let create_nonce = uuid::Uuid::new_v4().to_string();
@@ -215,9 +218,14 @@ mod access_control_integration_tests {
             .set_json(&create_request)
             .to_request();
         let create_resp = test::call_service(&app, create_req).await;
-        assert_eq!(create_resp.status(), 201, "Repository creation should succeed");
+        assert_eq!(
+            create_resp.status(),
+            201,
+            "Repository creation should succeed"
+        );
         let create_body_bytes = test::read_body(create_resp).await;
-        let create_response: serde_json::Value = serde_json::from_slice(&create_body_bytes).unwrap();
+        let create_response: serde_json::Value =
+            serde_json::from_slice(&create_body_bytes).unwrap();
         let repo_id = create_response["data"]["repoId"].as_str().unwrap();
 
         // Grant write access to target agent
@@ -251,14 +259,13 @@ mod access_control_integration_tests {
         let grant_status = grant_resp.status();
 
         // Verify the access entry was created with correct role
-        let access_role: Option<AccessRole> = sqlx::query_scalar(
-            "SELECT role FROM repo_access WHERE repo_id = $1 AND agent_id = $2"
-        )
-        .bind(repo_id)
-        .bind(&target_id)
-        .fetch_optional(&pool)
-        .await
-        .expect("Query should succeed");
+        let access_role: Option<AccessRole> =
+            sqlx::query_scalar("SELECT role FROM repo_access WHERE repo_id = $1 AND agent_id = $2")
+                .bind(repo_id)
+                .bind(&target_id)
+                .fetch_optional(&pool)
+                .await
+                .expect("Query should succeed");
 
         // Cleanup
         cleanup_test_repo(&pool, repo_id).await;
@@ -268,7 +275,11 @@ mod access_control_integration_tests {
         cleanup_test_agent(&pool, &target_id).await;
 
         assert_eq!(grant_status, 200, "Grant access should succeed");
-        assert_eq!(access_role, Some(AccessRole::Write), "Access role should be write");
+        assert_eq!(
+            access_role,
+            Some(AccessRole::Write),
+            "Access role should be write"
+        );
     }
 
     // =========================================================================
@@ -293,8 +304,9 @@ mod access_control_integration_tests {
         let app = test::init_service(
             App::new()
                 .app_data(app_state)
-                .service(web::scope("/v1").configure(configure_repo_routes))
-        ).await;
+                .service(web::scope("/v1").configure(configure_access_routes).configure(configure_repo_routes)),
+        )
+        .await;
 
         // Create a private repo
         let create_nonce = uuid::Uuid::new_v4().to_string();
@@ -327,7 +339,8 @@ mod access_control_integration_tests {
         let create_resp = test::call_service(&app, create_req).await;
         assert_eq!(create_resp.status(), 201);
         let create_body_bytes = test::read_body(create_resp).await;
-        let create_response: serde_json::Value = serde_json::from_slice(&create_body_bytes).unwrap();
+        let create_response: serde_json::Value =
+            serde_json::from_slice(&create_body_bytes).unwrap();
         let repo_id = create_response["data"]["repoId"].as_str().unwrap();
 
         // Grant access first
@@ -343,7 +356,7 @@ mod access_control_integration_tests {
 
         // Verify access exists
         let before_count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM repo_access WHERE repo_id = $1 AND agent_id = $2"
+            "SELECT COUNT(*) FROM repo_access WHERE repo_id = $1 AND agent_id = $2",
         )
         .bind(repo_id)
         .bind(&target_id)
@@ -381,7 +394,7 @@ mod access_control_integration_tests {
 
         // Verify access was removed
         let after_count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM repo_access WHERE repo_id = $1 AND agent_id = $2"
+            "SELECT COUNT(*) FROM repo_access WHERE repo_id = $1 AND agent_id = $2",
         )
         .bind(repo_id)
         .bind(&target_id)
@@ -423,8 +436,9 @@ mod access_control_integration_tests {
         let app = test::init_service(
             App::new()
                 .app_data(app_state)
-                .service(web::scope("/v1").configure(configure_repo_routes))
-        ).await;
+                .service(web::scope("/v1").configure(configure_access_routes).configure(configure_repo_routes)),
+        )
+        .await;
 
         // Create a private repo (owner gets admin access automatically)
         let create_nonce = uuid::Uuid::new_v4().to_string();
@@ -457,7 +471,8 @@ mod access_control_integration_tests {
         let create_resp = test::call_service(&app, create_req).await;
         assert_eq!(create_resp.status(), 201);
         let create_body_bytes = test::read_body(create_resp).await;
-        let create_response: serde_json::Value = serde_json::from_slice(&create_body_bytes).unwrap();
+        let create_response: serde_json::Value =
+            serde_json::from_slice(&create_body_bytes).unwrap();
         let repo_id = create_response["data"]["repoId"].as_str().unwrap();
 
         // Grant access to additional agents
@@ -516,9 +531,17 @@ mod access_control_integration_tests {
         cleanup_test_agent(&pool, &agent2_id).await;
         cleanup_test_agent(&pool, &agent3_id).await;
 
-        assert_eq!(list_status, 200, "List collaborators should succeed: {:?}", response);
+        assert_eq!(
+            list_status, 200,
+            "List collaborators should succeed: {:?}",
+            response
+        );
         let collaborators = response["data"]["collaborators"].as_array().unwrap();
-        assert_eq!(collaborators.len(), 3, "Should have 3 collaborators (owner + 2 granted)");
+        assert_eq!(
+            collaborators.len(),
+            3,
+            "Should have 3 collaborators (owner + 2 granted)"
+        );
     }
 
     // =========================================================================
@@ -544,8 +567,9 @@ mod access_control_integration_tests {
         let app = test::init_service(
             App::new()
                 .app_data(app_state)
-                .service(web::scope("/v1").configure(configure_repo_routes))
-        ).await;
+                .service(web::scope("/v1").configure(configure_access_routes).configure(configure_repo_routes)),
+        )
+        .await;
 
         // Create a private repo
         let create_nonce = uuid::Uuid::new_v4().to_string();
@@ -578,7 +602,8 @@ mod access_control_integration_tests {
         let create_resp = test::call_service(&app, create_req).await;
         assert_eq!(create_resp.status(), 201);
         let create_body_bytes = test::read_body(create_resp).await;
-        let create_response: serde_json::Value = serde_json::from_slice(&create_body_bytes).unwrap();
+        let create_response: serde_json::Value =
+            serde_json::from_slice(&create_body_bytes).unwrap();
         let repo_id = create_response["data"]["repoId"].as_str().unwrap();
 
         // Grant write access to writer (not admin)
@@ -631,7 +656,10 @@ mod access_control_integration_tests {
         cleanup_test_agent(&pool, &target_id).await;
 
         // AccessDenied maps to 401 Unauthorized
-        assert_eq!(grant_status, 401, "Non-admin should not be able to grant access");
+        assert_eq!(
+            grant_status, 401,
+            "Non-admin should not be able to grant access"
+        );
     }
 
     // =========================================================================
@@ -656,8 +684,9 @@ mod access_control_integration_tests {
         let app = test::init_service(
             App::new()
                 .app_data(app_state)
-                .service(web::scope("/v1").configure(configure_repo_routes))
-        ).await;
+                .service(web::scope("/v1").configure(configure_access_routes).configure(configure_repo_routes)),
+        )
+        .await;
 
         // Create a private repo
         let create_nonce = uuid::Uuid::new_v4().to_string();
@@ -690,7 +719,8 @@ mod access_control_integration_tests {
         let create_resp = test::call_service(&app, create_req).await;
         assert_eq!(create_resp.status(), 201);
         let create_body_bytes = test::read_body(create_resp).await;
-        let create_response: serde_json::Value = serde_json::from_slice(&create_body_bytes).unwrap();
+        let create_response: serde_json::Value =
+            serde_json::from_slice(&create_body_bytes).unwrap();
         let repo_id = create_response["data"]["repoId"].as_str().unwrap();
 
         // Grant access
@@ -778,8 +808,14 @@ mod access_control_integration_tests {
         cleanup_test_agent(&pool, &owner_id).await;
         cleanup_test_agent(&pool, &target_id).await;
 
-        assert!(grant_audit_count > 0, "Grant event should be recorded in audit_log");
-        assert!(revoke_audit_count > 0, "Revoke event should be recorded in audit_log");
+        assert!(
+            grant_audit_count > 0,
+            "Grant event should be recorded in audit_log"
+        );
+        assert!(
+            revoke_audit_count > 0,
+            "Revoke event should be recorded in audit_log"
+        );
     }
 
     // =========================================================================
@@ -805,8 +841,9 @@ mod access_control_integration_tests {
         let app = test::init_service(
             App::new()
                 .app_data(app_state)
-                .service(web::scope("/v1").configure(configure_repo_routes))
-        ).await;
+                .service(web::scope("/v1").configure(configure_access_routes).configure(configure_repo_routes)),
+        )
+        .await;
 
         // Create a private repo
         let create_nonce = uuid::Uuid::new_v4().to_string();
@@ -839,7 +876,8 @@ mod access_control_integration_tests {
         let create_resp = test::call_service(&app, create_req).await;
         assert_eq!(create_resp.status(), 201);
         let create_body_bytes = test::read_body(create_resp).await;
-        let create_response: serde_json::Value = serde_json::from_slice(&create_body_bytes).unwrap();
+        let create_response: serde_json::Value =
+            serde_json::from_slice(&create_body_bytes).unwrap();
         let repo_id = create_response["data"]["repoId"].as_str().unwrap();
 
         // Grant read access to reader
@@ -959,7 +997,13 @@ mod access_control_integration_tests {
         cleanup_test_agent(&pool, &writer_id).await;
 
         assert_eq!(reader_clone_status, 200, "Reader should be able to clone");
-        assert_eq!(writer_clone_status, 200, "Writer should be able to clone (write includes read)");
-        assert_eq!(reader_grant_status, 401, "Reader should not be able to grant access (requires admin)");
+        assert_eq!(
+            writer_clone_status, 200,
+            "Writer should be able to clone (write includes read)"
+        );
+        assert_eq!(
+            reader_grant_status, 401,
+            "Reader should not be able to grant access (requires admin)"
+        );
     }
 }

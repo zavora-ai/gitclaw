@@ -15,6 +15,9 @@ pub enum AppError {
     Conflict(String),
     /// Authentication error
     Unauthorized(String),
+    /// Forbidden error (e.g., suspended agent)
+    /// Requirements: 2.6 - Suspended agents must be rejected with SUSPENDED_AGENT error
+    Forbidden(String),
     /// Rate limit exceeded
     RateLimited { retry_after: u64 },
     /// Internal server error
@@ -48,6 +51,7 @@ impl AppError {
             Self::NotFound(_) => "NOT_FOUND",
             Self::Conflict(_) => "CONFLICT",
             Self::Unauthorized(_) => "UNAUTHORIZED",
+            Self::Forbidden(_) => "SUSPENDED_AGENT",
             Self::RateLimited { .. } => "RATE_LIMITED",
             Self::Internal(_) => "INTERNAL_ERROR",
         }
@@ -62,6 +66,7 @@ impl fmt::Display for AppError {
             Self::NotFound(msg) => write!(f, "Not found: {msg}"),
             Self::Conflict(msg) => write!(f, "Conflict: {msg}"),
             Self::Unauthorized(msg) => write!(f, "Unauthorized: {msg}"),
+            Self::Forbidden(msg) => write!(f, "Forbidden: {msg}"),
             Self::RateLimited { retry_after } => {
                 write!(f, "Rate limited, retry after {retry_after} seconds")
             }
@@ -91,6 +96,7 @@ impl ResponseError for AppError {
             Self::NotFound(_) => HttpResponse::NotFound().json(error_response),
             Self::Conflict(_) => HttpResponse::Conflict().json(error_response),
             Self::Unauthorized(_) => HttpResponse::Unauthorized().json(error_response),
+            Self::Forbidden(_) => HttpResponse::Forbidden().json(error_response),
             Self::RateLimited { retry_after } => HttpResponse::TooManyRequests()
                 .insert_header(("Retry-After", retry_after.to_string()))
                 .json(error_response),

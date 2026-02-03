@@ -6,21 +6,21 @@
 
 #[cfg(test)]
 mod http_integration_tests {
-    use actix_web::{test, web, App};
-    use base64::engine::general_purpose::STANDARD;
+    use actix_web::{App, test, web};
     use base64::Engine;
+    use base64::engine::general_purpose::STANDARD;
     use chrono::Utc;
     use ed25519_dalek::{Signer, SigningKey};
     use rand::rngs::OsRng;
     use sha2::{Digest, Sha256};
     use sqlx::PgPool;
 
+    use crate::AppState;
     use crate::config::Config;
     use crate::handlers::{configure_git_routes, configure_repo_routes};
     use crate::models::{AccessRole, Visibility};
-    use crate::services::{RateLimiterService, SignatureValidator};
     use crate::services::signature::SignatureEnvelope;
-    use crate::AppState;
+    use crate::services::{RateLimiterService, SignatureValidator};
 
     /// Helper to create a test database pool - returns None if connection fails
     async fn try_create_test_pool() -> Option<PgPool> {
@@ -28,7 +28,7 @@ mod http_integration_tests {
         let _ = dotenvy::from_filename("backend/.env");
         // Also try current directory (for running from backend directory)
         let _ = dotenvy::dotenv();
-        
+
         let database_url = match std::env::var("DATABASE_URL") {
             Ok(url) => url,
             Err(_) => return None,
@@ -52,7 +52,9 @@ mod http_integration_tests {
     /// Sign an envelope with Ed25519
     fn sign_envelope(signing_key: &SigningKey, envelope: &SignatureEnvelope) -> String {
         let validator = SignatureValidator::default();
-        let canonical = validator.canonicalize(envelope).expect("canonicalize failed");
+        let canonical = validator
+            .canonicalize(envelope)
+            .expect("canonicalize failed");
         let message_hash = Sha256::digest(canonical.as_bytes());
         let signature = signing_key.sign(&message_hash);
         STANDARD.encode(signature.to_bytes())
@@ -186,8 +188,9 @@ mod http_integration_tests {
         let app = test::init_service(
             App::new()
                 .app_data(app_state)
-                .service(web::scope("/v1").configure(configure_repo_routes))
-        ).await;
+                .service(web::scope("/v1").configure(configure_repo_routes)),
+        )
+        .await;
 
         // Body must match exactly what the service expects for signature verification
         let body = serde_json::json!({
@@ -235,7 +238,11 @@ mod http_integration_tests {
         cleanup_idempotency(&pool, &agent_id, &nonce).await;
         cleanup_test_agent(&pool, &agent_id).await;
 
-        assert_eq!(status, 201, "Expected 201 Created, got {}: {:?}", status, response);
+        assert_eq!(
+            status, 201,
+            "Expected 201 Created, got {}: {:?}",
+            status, response
+        );
         assert_eq!(response["data"]["name"], repo_name);
         assert_eq!(response["data"]["ownerId"], agent_id);
         assert_eq!(response["data"]["defaultBranch"], "main");
@@ -263,8 +270,9 @@ mod http_integration_tests {
         let app = test::init_service(
             App::new()
                 .app_data(app_state)
-                .service(web::scope("/v1").configure(configure_repo_routes))
-        ).await;
+                .service(web::scope("/v1").configure(configure_repo_routes)),
+        )
+        .await;
 
         // First creation
         let nonce1 = uuid::Uuid::new_v4().to_string();
@@ -368,8 +376,9 @@ mod http_integration_tests {
         let app = test::init_service(
             App::new()
                 .app_data(app_state)
-                .service(web::scope("/v1").configure(configure_repo_routes))
-        ).await;
+                .service(web::scope("/v1").configure(configure_repo_routes)),
+        )
+        .await;
 
         let body = serde_json::json!({
             "name": repo_name,
@@ -406,13 +415,12 @@ mod http_integration_tests {
         let repo_id = response["data"]["repoId"].as_str().unwrap();
 
         // Verify star count is 0 in database
-        let star_count: Option<i32> = sqlx::query_scalar(
-            "SELECT stars FROM repo_star_counts WHERE repo_id = $1"
-        )
-        .bind(repo_id)
-        .fetch_optional(&pool)
-        .await
-        .expect("Query should succeed");
+        let star_count: Option<i32> =
+            sqlx::query_scalar("SELECT stars FROM repo_star_counts WHERE repo_id = $1")
+                .bind(repo_id)
+                .fetch_optional(&pool)
+                .await
+                .expect("Query should succeed");
 
         // Cleanup
         cleanup_test_repo(&pool, repo_id).await;
@@ -445,8 +453,9 @@ mod http_integration_tests {
         let app = test::init_service(
             App::new()
                 .app_data(app_state)
-                .service(web::scope("/v1").configure(configure_repo_routes))
-        ).await;
+                .service(web::scope("/v1").configure(configure_repo_routes)),
+        )
+        .await;
 
         let body = serde_json::json!({
             "name": repo_name,
@@ -483,21 +492,24 @@ mod http_integration_tests {
         let repo_id = response["data"]["repoId"].as_str().unwrap();
 
         // Verify owner has admin access in database
-        let access_role: Option<AccessRole> = sqlx::query_scalar(
-            "SELECT role FROM repo_access WHERE repo_id = $1 AND agent_id = $2"
-        )
-        .bind(repo_id)
-        .bind(&agent_id)
-        .fetch_optional(&pool)
-        .await
-        .expect("Query should succeed");
+        let access_role: Option<AccessRole> =
+            sqlx::query_scalar("SELECT role FROM repo_access WHERE repo_id = $1 AND agent_id = $2")
+                .bind(repo_id)
+                .bind(&agent_id)
+                .fetch_optional(&pool)
+                .await
+                .expect("Query should succeed");
 
         // Cleanup
         cleanup_test_repo(&pool, repo_id).await;
         cleanup_idempotency(&pool, &agent_id, &nonce).await;
         cleanup_test_agent(&pool, &agent_id).await;
 
-        assert_eq!(access_role, Some(AccessRole::Admin), "Owner should have admin access");
+        assert_eq!(
+            access_role,
+            Some(AccessRole::Admin),
+            "Owner should have admin access"
+        );
     }
 
     // =========================================================================
@@ -524,8 +536,9 @@ mod http_integration_tests {
         let app = test::init_service(
             App::new()
                 .app_data(app_state)
-                .service(web::scope("/v1").configure(configure_repo_routes))
-        ).await;
+                .service(web::scope("/v1").configure(configure_repo_routes)),
+        )
+        .await;
 
         // Create public repo
         let create_body = serde_json::json!({
@@ -556,10 +569,15 @@ mod http_integration_tests {
             .set_json(&create_request)
             .to_request();
         let create_resp = test::call_service(&app, create_req).await;
-        assert_eq!(create_resp.status(), 201, "Repository creation should succeed");
+        assert_eq!(
+            create_resp.status(),
+            201,
+            "Repository creation should succeed"
+        );
 
         let create_body_bytes = test::read_body(create_resp).await;
-        let create_response: serde_json::Value = serde_json::from_slice(&create_body_bytes).unwrap();
+        let create_response: serde_json::Value =
+            serde_json::from_slice(&create_body_bytes).unwrap();
         let repo_id = create_response["data"]["repoId"].as_str().unwrap();
 
         // Create another agent to clone
@@ -594,7 +612,8 @@ mod http_integration_tests {
         let clone_status = clone_resp.status();
 
         let clone_body_bytes = test::read_body(clone_resp).await;
-        let clone_response: serde_json::Value = serde_json::from_slice(&clone_body_bytes).unwrap_or_default();
+        let clone_response: serde_json::Value =
+            serde_json::from_slice(&clone_body_bytes).unwrap_or_default();
 
         // Cleanup
         cleanup_test_repo(&pool, repo_id).await;
@@ -603,7 +622,11 @@ mod http_integration_tests {
         cleanup_test_agent(&pool, &owner_id).await;
         cleanup_test_agent(&pool, &cloner_id).await;
 
-        assert_eq!(clone_status, 200, "Clone of public repo should succeed: {:?}", clone_response);
+        assert_eq!(
+            clone_status, 200,
+            "Clone of public repo should succeed: {:?}",
+            clone_response
+        );
         assert_eq!(clone_response["data"]["repoId"], repo_id);
     }
 
@@ -631,8 +654,9 @@ mod http_integration_tests {
         let app = test::init_service(
             App::new()
                 .app_data(app_state)
-                .service(web::scope("/v1").configure(configure_repo_routes))
-        ).await;
+                .service(web::scope("/v1").configure(configure_repo_routes)),
+        )
+        .await;
 
         // Create private repo
         let create_body = serde_json::json!({
@@ -663,10 +687,15 @@ mod http_integration_tests {
             .set_json(&create_request)
             .to_request();
         let create_resp = test::call_service(&app, create_req).await;
-        assert_eq!(create_resp.status(), 201, "Repository creation should succeed");
+        assert_eq!(
+            create_resp.status(),
+            201,
+            "Repository creation should succeed"
+        );
 
         let create_body_bytes = test::read_body(create_resp).await;
-        let create_response: serde_json::Value = serde_json::from_slice(&create_body_bytes).unwrap();
+        let create_response: serde_json::Value =
+            serde_json::from_slice(&create_body_bytes).unwrap();
         let repo_id = create_response["data"]["repoId"].as_str().unwrap();
 
         // Create another agent without access
@@ -707,7 +736,10 @@ mod http_integration_tests {
         cleanup_test_agent(&pool, &cloner_id).await;
 
         // AccessDenied maps to 401 Unauthorized in the error handler
-        assert_eq!(clone_status, 401, "Clone of private repo without access should return 401");
+        assert_eq!(
+            clone_status, 401,
+            "Clone of private repo without access should return 401"
+        );
     }
 
     // =========================================================================
@@ -734,8 +766,9 @@ mod http_integration_tests {
         let app = test::init_service(
             App::new()
                 .app_data(app_state)
-                .service(web::scope("/v1").configure(configure_repo_routes))
-        ).await;
+                .service(web::scope("/v1").configure(configure_repo_routes)),
+        )
+        .await;
 
         // Create private repo
         let create_body = serde_json::json!({
@@ -766,10 +799,15 @@ mod http_integration_tests {
             .set_json(&create_request)
             .to_request();
         let create_resp = test::call_service(&app, create_req).await;
-        assert_eq!(create_resp.status(), 201, "Repository creation should succeed");
+        assert_eq!(
+            create_resp.status(),
+            201,
+            "Repository creation should succeed"
+        );
 
         let create_body_bytes = test::read_body(create_resp).await;
-        let create_response: serde_json::Value = serde_json::from_slice(&create_body_bytes).unwrap();
+        let create_response: serde_json::Value =
+            serde_json::from_slice(&create_body_bytes).unwrap();
         let repo_id = create_response["data"]["repoId"].as_str().unwrap();
 
         // Create another agent and grant read access directly in DB
@@ -819,7 +857,10 @@ mod http_integration_tests {
         cleanup_test_agent(&pool, &owner_id).await;
         cleanup_test_agent(&pool, &cloner_id).await;
 
-        assert_eq!(clone_status, 200, "Clone with explicit access should succeed");
+        assert_eq!(
+            clone_status, 200,
+            "Clone with explicit access should succeed"
+        );
     }
 
     // =========================================================================
@@ -846,8 +887,9 @@ mod http_integration_tests {
         let app = test::init_service(
             App::new()
                 .app_data(app_state)
-                .service(web::scope("/v1").configure(configure_repo_routes))
-        ).await;
+                .service(web::scope("/v1").configure(configure_repo_routes)),
+        )
+        .await;
 
         // Create public repo
         let create_body = serde_json::json!({
@@ -878,10 +920,15 @@ mod http_integration_tests {
             .set_json(&create_request)
             .to_request();
         let create_resp = test::call_service(&app, create_req).await;
-        assert_eq!(create_resp.status(), 201, "Repository creation should succeed");
+        assert_eq!(
+            create_resp.status(),
+            201,
+            "Repository creation should succeed"
+        );
 
         let create_body_bytes = test::read_body(create_resp).await;
-        let create_response: serde_json::Value = serde_json::from_slice(&create_body_bytes).unwrap();
+        let create_response: serde_json::Value =
+            serde_json::from_slice(&create_body_bytes).unwrap();
         let repo_id = create_response["data"]["repoId"].as_str().unwrap();
 
         // Clone the repo
@@ -932,7 +979,10 @@ mod http_integration_tests {
         cleanup_test_agent(&pool, &owner_id).await;
         cleanup_test_agent(&pool, &cloner_id).await;
 
-        assert!(audit_count > 0, "Clone event should be recorded in audit_log");
+        assert!(
+            audit_count > 0,
+            "Clone event should be recorded in audit_log"
+        );
     }
 
     // =========================================================================
@@ -959,12 +1009,13 @@ mod http_integration_tests {
         // Configure git routes BEFORE repo routes so the more specific /repos/{repoId}/info/refs
         // is registered before the /repos/{repoId} catch-all
         let app = test::init_service(
-            App::new()
-                .app_data(app_state.clone())
-                .service(web::scope("/v1")
+            App::new().app_data(app_state.clone()).service(
+                web::scope("/v1")
                     .configure(configure_git_routes)
-                    .configure(configure_repo_routes))
-        ).await;
+                    .configure(configure_repo_routes),
+            ),
+        )
+        .await;
 
         // Create public repo
         let create_body = serde_json::json!({
@@ -995,21 +1046,30 @@ mod http_integration_tests {
             .set_json(&create_request)
             .to_request();
         let create_resp = test::call_service(&app, create_req).await;
-        assert_eq!(create_resp.status(), 201, "Repository creation should succeed");
+        assert_eq!(
+            create_resp.status(),
+            201,
+            "Repository creation should succeed"
+        );
 
         let create_body_bytes = test::read_body(create_resp).await;
-        let create_response: serde_json::Value = serde_json::from_slice(&create_body_bytes).unwrap();
+        let create_response: serde_json::Value =
+            serde_json::from_slice(&create_body_bytes).unwrap();
         let repo_id = create_response["data"]["repoId"].as_str().unwrap();
 
         // Get ref advertisement via Git info/refs endpoint
         let info_refs_req = test::TestRequest::get()
-            .uri(&format!("/v1/repos/{}/info/refs?service=git-upload-pack", repo_id))
+            .uri(&format!(
+                "/v1/repos/{}/info/refs?service=git-upload-pack",
+                repo_id
+            ))
             .to_request();
         let info_refs_resp = test::call_service(&app, info_refs_req).await;
         let info_refs_status = info_refs_resp.status();
 
         // Check content type - clone it to avoid borrow issues
-        let content_type = info_refs_resp.headers()
+        let content_type = info_refs_resp
+            .headers()
             .get("content-type")
             .and_then(|v| v.to_str().ok())
             .unwrap_or("")
@@ -1024,9 +1084,15 @@ mod http_integration_tests {
         cleanup_test_agent(&pool, &owner_id).await;
 
         assert_eq!(info_refs_status, 200, "Get refs should succeed");
-        assert!(content_type.contains("git-upload-pack-advertisement"), 
-            "Content-Type should be git-upload-pack-advertisement, got: {}", content_type);
-        assert!(body_str.contains("refs/heads/main") || body_str.contains("main"), 
-            "Should contain main branch ref: {}", body_str);
+        assert!(
+            content_type.contains("git-upload-pack-advertisement"),
+            "Content-Type should be git-upload-pack-advertisement, got: {}",
+            content_type
+        );
+        assert!(
+            body_str.contains("refs/heads/main") || body_str.contains("main"),
+            "Should contain main branch ref: {}",
+            body_str
+        );
     }
 }

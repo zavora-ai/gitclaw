@@ -18,7 +18,9 @@ pub enum IdempotencyError {
     #[error("Database error: {0}")]
     Database(#[from] sqlx::Error),
 
-    #[error("Replay attack detected: nonce was used for action '{previous_action}', cannot reuse for '{attempted_action}'")]
+    #[error(
+        "Replay attack detected: nonce was used for action '{previous_action}', cannot reuse for '{attempted_action}'"
+    )]
     ReplayAttack {
         previous_action: String,
         attempted_action: String,
@@ -125,13 +127,11 @@ impl IdempotencyService {
 
         match record {
             None => Ok(IdempotencyResult::New),
-            Some(rec) if rec.action == action => {
-                Ok(IdempotencyResult::Cached(CachedResponse {
-                    status_code: rec.status_code,
-                    response_json: rec.response_json,
-                    created_at: rec.created_at,
-                }))
-            }
+            Some(rec) if rec.action == action => Ok(IdempotencyResult::Cached(CachedResponse {
+                status_code: rec.status_code,
+                response_json: rec.response_json,
+                created_at: rec.created_at,
+            })),
             Some(rec) => Ok(IdempotencyResult::ReplayAttack {
                 previous_action: rec.action,
             }),
@@ -258,7 +258,6 @@ impl IdempotencyService {
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -458,7 +457,7 @@ mod tests {
     #[tokio::test]
     async fn integration_cleanup_expired() {
         let pool = create_test_pool().await;
-        
+
         // Use a very short TTL for testing
         let config = IdempotencyConfig { ttl_hours: 0 }; // Expires immediately
         let service = IdempotencyService::with_config(pool.clone(), config);
@@ -476,7 +475,10 @@ mod tests {
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
         // Cleanup should remove the expired entry
-        let deleted = service.cleanup_expired().await.expect("cleanup should succeed");
+        let deleted = service
+            .cleanup_expired()
+            .await
+            .expect("cleanup should succeed");
         assert!(deleted >= 1, "Should have deleted at least 1 expired entry");
 
         // Check should now return New
@@ -492,8 +494,8 @@ mod tests {
     #[allow(dead_code)]
     async fn create_test_pool() -> PgPool {
         dotenvy::dotenv().ok();
-        let database_url = std::env::var("DATABASE_URL")
-            .expect("DATABASE_URL must be set for integration tests");
+        let database_url =
+            std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for integration tests");
 
         sqlx::postgres::PgPoolOptions::new()
             .max_connections(5)
@@ -522,9 +524,7 @@ mod tests {
         static RUNTIME: OnceLock<Runtime> = OnceLock::new();
 
         fn get_runtime() -> &'static Runtime {
-            RUNTIME.get_or_init(|| {
-                Runtime::new().expect("Failed to create Tokio runtime")
-            })
+            RUNTIME.get_or_init(|| Runtime::new().expect("Failed to create Tokio runtime"))
         }
 
         /// Strategy to generate valid agent IDs
@@ -551,14 +551,16 @@ mod tests {
                 "git-upload-pack",
             ];
 
-            (0..actions.len(), 0..actions.len())
-                .prop_filter_map("actions must be different", move |(i, j)| {
+            (0..actions.len(), 0..actions.len()).prop_filter_map(
+                "actions must be different",
+                move |(i, j)| {
                     if i != j {
                         Some((actions[i].to_string(), actions[j].to_string()))
                     } else {
                         None
                     }
-                })
+                },
+            )
         }
 
         /// Helper to clean up test data after each test
@@ -789,9 +791,7 @@ mod tests {
         static RUNTIME: OnceLock<Runtime> = OnceLock::new();
 
         fn get_runtime() -> &'static Runtime {
-            RUNTIME.get_or_init(|| {
-                Runtime::new().expect("Failed to create Tokio runtime")
-            })
+            RUNTIME.get_or_init(|| Runtime::new().expect("Failed to create Tokio runtime"))
         }
 
         /// Strategy to generate valid agent IDs (UUID format)

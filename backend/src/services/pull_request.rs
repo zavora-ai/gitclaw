@@ -10,13 +10,15 @@ use uuid::Uuid;
 
 use crate::models::{
     AccessRole, CiStatus, CreatePrRequest, CreatePrResponse, CreateReviewRequest,
-    CreateReviewResponse, DiffStats, MergePrResponse, MergeStrategy, PrInfo, PrStatus,
-    PullRequest, Review, ReviewVerdict,
+    CreateReviewResponse, DiffStats, MergePrResponse, MergeStrategy, PrInfo, PrStatus, PullRequest,
+    Review, ReviewVerdict,
 };
 use crate::services::audit::{AuditError, AuditEvent, AuditService};
 use crate::services::ci::CiService;
 use crate::services::idempotency::{IdempotencyError, IdempotencyResult, IdempotencyService};
-use crate::services::signature::{SignatureEnvelope, SignatureError, SignatureValidator};
+use crate::services::signature::{
+    SignatureEnvelope, SignatureError, SignatureValidator, get_agent_public_key_if_not_suspended,
+};
 
 /// Errors that can occur during pull request operations
 #[derive(Debug, Error)]
@@ -57,8 +59,13 @@ pub enum PullRequestError {
     #[error("Invalid PR state: {0}")]
     InvalidState(String),
 
+    /// Agent is suspended and cannot perform mutating operations
+    /// Requirements: 2.6 - Suspended agents must be rejected with SUSPENDED_AGENT error
+    #[error("Agent is suspended: {0}")]
+    Suspended(String),
+
     #[error("Signature validation failed: {0}")]
-    SignatureError(#[from] SignatureError),
+    SignatureError(SignatureError),
 
     #[error("Idempotency error: {0}")]
     IdempotencyError(#[from] IdempotencyError),
@@ -68,6 +75,20 @@ pub enum PullRequestError {
 
     #[error("Audit error: {0}")]
     Audit(#[from] AuditError),
+}
+
+impl From<SignatureError> for PullRequestError {
+    fn from(err: SignatureError) -> Self {
+        match err {
+            SignatureError::Suspended(msg) => PullRequestError::Suspended(msg),
+            SignatureError::MissingField(msg) if msg.starts_with("Agent not found:") => {
+                // Extract agent_id from the message
+                let agent_id = msg.strip_prefix("Agent not found: ").unwrap_or(&msg);
+                PullRequestError::AgentNotFound(agent_id.to_string())
+            }
+            other => PullRequestError::SignatureError(other),
+        }
+    }
 }
 
 /// Service for managing pull requests
@@ -105,7 +126,11 @@ impl PullRequestService {
         const ACTION: &str = "pr_create";
 
         // Check idempotency first
-        match self.idempotency_service.check(agent_id, nonce, ACTION).await? {
+        match self
+            .idempotency_service
+            .check(agent_id, nonce, ACTION)
+            .await?
+        {
             IdempotencyResult::Cached(cached) => {
                 let response: CreatePrResponse = serde_json::from_value(cached.response_json)
                     .map_err(|e| PullRequestError::Database(sqlx::Error::Decode(Box::new(e))))?;
@@ -249,9 +274,16 @@ impl PullRequestService {
 
         // Trigger CI pipeline (Requirement 6.3, 9.1)
         // Get the commit SHA from the source branch
-        if let Ok(Some(commit_sha)) = self.get_branch_commit_sha(repo_id, &response.source_branch).await {
+        if let Ok(Some(commit_sha)) = self
+            .get_branch_commit_sha(repo_id, &response.source_branch)
+            .await
+        {
             // Trigger CI asynchronously - don't fail PR creation if CI trigger fails
-            if let Err(e) = self.ci_service.trigger_for_pr(repo_id, &response.pr_id, &commit_sha).await {
+            if let Err(e) = self
+                .ci_service
+                .trigger_for_pr(repo_id, &response.pr_id, &commit_sha)
+                .await
+            {
                 tracing::warn!("Failed to trigger CI for PR {}: {}", response.pr_id, e);
             }
         }
@@ -263,6 +295,7 @@ impl PullRequestService {
     ///
     /// Requirements: 7.1, 7.2, 7.3, 7.4, 7.5
     /// Design: DR-7.2 (Review Service)
+    #[allow(clippy::too_many_arguments)]
     pub async fn submit_review(
         &self,
         repo_id: &str,
@@ -276,10 +309,16 @@ impl PullRequestService {
         const ACTION: &str = "pr_review";
 
         // Check idempotency first
-        match self.idempotency_service.check(agent_id, nonce, ACTION).await? {
+        match self
+            .idempotency_service
+            .check(agent_id, nonce, ACTION)
+            .await?
+        {
             IdempotencyResult::Cached(cached) => {
                 let response: CreateReviewResponse = serde_json::from_value(cached.response_json)
-                    .map_err(|e| PullRequestError::Database(sqlx::Error::Decode(Box::new(e))))?;
+                    .map_err(|e| {
+                    PullRequestError::Database(sqlx::Error::Decode(Box::new(e)))
+                })?;
                 return Ok(response);
             }
             IdempotencyResult::ReplayAttack { previous_action } => {
@@ -355,7 +394,7 @@ impl PullRequestService {
         .bind(&review_id)
         .bind(pr_id)
         .bind(agent_id)
-        .bind(&request.verdict)
+        .bind(request.verdict)
         .bind(&request.body)
         .bind(created_at)
         .execute(&mut *tx)
@@ -406,6 +445,7 @@ impl PullRequestService {
     ///
     /// Requirements: 8.1, 8.2, 8.3, 8.4, 8.5, 8.6
     /// Design: DR-7.3 (Merge Service)
+    #[allow(clippy::too_many_arguments)]
     pub async fn merge(
         &self,
         repo_id: &str,
@@ -419,7 +459,11 @@ impl PullRequestService {
         const ACTION: &str = "pr_merge";
 
         // Check idempotency first
-        match self.idempotency_service.check(agent_id, nonce, ACTION).await? {
+        match self
+            .idempotency_service
+            .check(agent_id, nonce, ACTION)
+            .await?
+        {
             IdempotencyResult::Cached(cached) => {
                 let response: MergePrResponse = serde_json::from_value(cached.response_json)
                     .map_err(|e| PullRequestError::Database(sqlx::Error::Decode(Box::new(e))))?;
@@ -838,14 +882,11 @@ impl PullRequestService {
     }
 
     /// Get agent's public key for signature validation
+    /// Also checks if the agent is suspended (Requirement 2.6)
     async fn get_agent_public_key(&self, agent_id: &str) -> Result<String, PullRequestError> {
-        let public_key: Option<String> =
-            sqlx::query_scalar("SELECT public_key FROM agents WHERE agent_id = $1")
-                .bind(agent_id)
-                .fetch_optional(&self.pool)
-                .await?;
-
-        public_key.ok_or_else(|| PullRequestError::AgentNotFound(agent_id.to_string()))
+        get_agent_public_key_if_not_suspended(&self.pool, agent_id)
+            .await
+            .map_err(PullRequestError::from)
     }
 
     /// Get the commit SHA for a branch
@@ -855,13 +896,12 @@ impl PullRequestService {
         branch_name: &str,
     ) -> Result<Option<String>, PullRequestError> {
         let ref_name = format!("refs/heads/{}", branch_name);
-        let oid: Option<String> = sqlx::query_scalar(
-            "SELECT oid FROM repo_refs WHERE repo_id = $1 AND ref_name = $2",
-        )
-        .bind(repo_id)
-        .bind(&ref_name)
-        .fetch_optional(&self.pool)
-        .await?;
+        let oid: Option<String> =
+            sqlx::query_scalar("SELECT oid FROM repo_refs WHERE repo_id = $1 AND ref_name = $2")
+                .bind(repo_id)
+                .bind(&ref_name)
+                .fetch_optional(&self.pool)
+                .await?;
 
         Ok(oid)
     }

@@ -8,17 +8,17 @@
 
 #[cfg(test)]
 mod http_integration_tests {
-    use actix_web::{test, web, App};
+    use actix_web::{App, test, web};
     use chrono::{Duration, Utc};
     use sqlx::PgPool;
     use uuid::Uuid;
 
+    use crate::AppState;
     use crate::config::Config;
     use crate::handlers::configure_audit_routes;
+    use crate::services::RateLimiterService;
     use crate::services::audit::{AuditAction, AuditEvent, AuditService, ResourceType};
     use crate::services::outbox::{OutboxConfig, OutboxService, OutboxStatus, OutboxTopic};
-    use crate::services::RateLimiterService;
-    use crate::AppState;
 
     /// Helper to create a test database pool - returns None if connection fails
     async fn try_create_test_pool() -> Option<PgPool> {
@@ -108,9 +108,21 @@ mod http_integration_tests {
 
         // Test all action types
         let action_types = vec![
-            (AuditAction::AgentRegister, ResourceType::Agent, "agent-test-1"),
-            (AuditAction::RepoCreate, ResourceType::Repository, "repo-test-1"),
-            (AuditAction::RepoClone, ResourceType::Repository, "repo-test-2"),
+            (
+                AuditAction::AgentRegister,
+                ResourceType::Agent,
+                "agent-test-1",
+            ),
+            (
+                AuditAction::RepoCreate,
+                ResourceType::Repository,
+                "repo-test-1",
+            ),
+            (
+                AuditAction::RepoClone,
+                ResourceType::Repository,
+                "repo-test-2",
+            ),
             (AuditAction::Push, ResourceType::Repository, "repo-test-3"),
             (AuditAction::PrOpen, ResourceType::PullRequest, "pr-test-1"),
             (AuditAction::PrReview, ResourceType::Review, "review-test-1"),
@@ -129,7 +141,11 @@ mod http_integration_tests {
             );
 
             let result = audit_service.append(event).await;
-            assert!(result.is_ok(), "Failed to create audit event for {:?}", action);
+            assert!(
+                result.is_ok(),
+                "Failed to create audit event for {:?}",
+                action
+            );
 
             let recorded = result.unwrap();
             assert_eq!(recorded.agent_id, agent_id);
@@ -170,36 +186,44 @@ mod http_integration_tests {
             "test-signature",
         );
 
-        let recorded = audit_service.append(event).await.expect("Failed to create audit event");
+        let recorded = audit_service
+            .append(event)
+            .await
+            .expect("Failed to create audit event");
 
         // Attempt to UPDATE - should fail due to trigger
-        let update_result = sqlx::query(
-            "UPDATE audit_log SET action = 'modified' WHERE event_id = $1"
-        )
-        .bind(recorded.event_id)
-        .execute(&pool)
-        .await;
+        let update_result =
+            sqlx::query("UPDATE audit_log SET action = 'modified' WHERE event_id = $1")
+                .bind(recorded.event_id)
+                .execute(&pool)
+                .await;
 
-        assert!(update_result.is_err(), "UPDATE should be rejected by trigger");
+        assert!(
+            update_result.is_err(),
+            "UPDATE should be rejected by trigger"
+        );
         let err_msg = update_result.unwrap_err().to_string();
         assert!(
             err_msg.contains("append-only") || err_msg.contains("UPDATE"),
-            "Error should mention append-only constraint: {}", err_msg
+            "Error should mention append-only constraint: {}",
+            err_msg
         );
 
         // Attempt to DELETE - should fail due to trigger
-        let delete_result = sqlx::query(
-            "DELETE FROM audit_log WHERE event_id = $1"
-        )
-        .bind(recorded.event_id)
-        .execute(&pool)
-        .await;
+        let delete_result = sqlx::query("DELETE FROM audit_log WHERE event_id = $1")
+            .bind(recorded.event_id)
+            .execute(&pool)
+            .await;
 
-        assert!(delete_result.is_err(), "DELETE should be rejected by trigger");
+        assert!(
+            delete_result.is_err(),
+            "DELETE should be rejected by trigger"
+        );
         let err_msg = delete_result.unwrap_err().to_string();
         assert!(
             err_msg.contains("append-only") || err_msg.contains("DELETE"),
-            "Error should mention append-only constraint: {}", err_msg
+            "Error should mention append-only constraint: {}",
+            err_msg
         );
 
         cleanup_test_agent(&pool, &agent_id).await;
@@ -235,7 +259,10 @@ mod http_integration_tests {
                 serde_json::json!({"agent": 1, "index": i}),
                 "sig1",
             );
-            audit_service.append(event).await.expect("Failed to create event");
+            audit_service
+                .append(event)
+                .await
+                .expect("Failed to create event");
         }
 
         // Create events for agent2
@@ -248,25 +275,44 @@ mod http_integration_tests {
                 serde_json::json!({"agent": 2, "index": i}),
                 "sig2",
             );
-            audit_service.append(event).await.expect("Failed to create event");
+            audit_service
+                .append(event)
+                .await
+                .expect("Failed to create event");
         }
 
         // Query for agent1's events
-        let agent1_events = audit_service.get_for_agent(&agent1_id, Some(100)).await
+        let agent1_events = audit_service
+            .get_for_agent(&agent1_id, Some(100))
+            .await
             .expect("Query should succeed");
 
-        assert!(agent1_events.len() >= 3, "Agent1 should have at least 3 events");
+        assert!(
+            agent1_events.len() >= 3,
+            "Agent1 should have at least 3 events"
+        );
         for event in &agent1_events {
-            assert_eq!(event.agent_id, agent1_id, "All events should belong to agent1");
+            assert_eq!(
+                event.agent_id, agent1_id,
+                "All events should belong to agent1"
+            );
         }
 
         // Query for agent2's events
-        let agent2_events = audit_service.get_for_agent(&agent2_id, Some(100)).await
+        let agent2_events = audit_service
+            .get_for_agent(&agent2_id, Some(100))
+            .await
             .expect("Query should succeed");
 
-        assert!(agent2_events.len() >= 2, "Agent2 should have at least 2 events");
+        assert!(
+            agent2_events.len() >= 2,
+            "Agent2 should have at least 2 events"
+        );
         for event in &agent2_events {
-            assert_eq!(event.agent_id, agent2_id, "All events should belong to agent2");
+            assert_eq!(
+                event.agent_id, agent2_id,
+                "All events should belong to agent2"
+            );
         }
 
         cleanup_test_agent(&pool, &agent1_id).await;
@@ -310,7 +356,10 @@ mod http_integration_tests {
                 serde_json::json!({"action": action.as_str()}),
                 "test-sig",
             );
-            audit_service.append(event).await.expect("Failed to create event");
+            audit_service
+                .append(event)
+                .await
+                .expect("Failed to create event");
         }
 
         // Query for repo's events
@@ -321,7 +370,10 @@ mod http_integration_tests {
 
         assert_eq!(repo_events.len(), 3, "Repo should have exactly 3 events");
         for event in &repo_events {
-            assert_eq!(event.resource_id, repo_id, "All events should be for the repo");
+            assert_eq!(
+                event.resource_id, repo_id,
+                "All events should be for the repo"
+            );
         }
 
         cleanup_test_agent(&pool, &agent_id).await;
@@ -355,7 +407,10 @@ mod http_integration_tests {
             serde_json::json!({}),
             "sig",
         );
-        audit_service.append(event1).await.expect("Failed to create event");
+        audit_service
+            .append(event1)
+            .await
+            .expect("Failed to create event");
 
         let event2 = AuditEvent::new(
             &agent_id,
@@ -365,17 +420,21 @@ mod http_integration_tests {
             serde_json::json!({}),
             "sig",
         );
-        audit_service.append(event2).await.expect("Failed to create event");
+        audit_service
+            .append(event2)
+            .await
+            .expect("Failed to create event");
 
         // Query using the query builder
         use crate::services::audit::AuditQuery;
-        
-        let star_query = AuditQuery::new()
-            .agent(&agent_id)
-            .action(AuditAction::Star);
-        
-        let star_events = audit_service.query(star_query).await.expect("Query should succeed");
-        
+
+        let star_query = AuditQuery::new().agent(&agent_id).action(AuditAction::Star);
+
+        let star_events = audit_service
+            .query(star_query)
+            .await
+            .expect("Query should succeed");
+
         for event in &star_events.events {
             assert_eq!(event.action, "star", "All events should be star actions");
         }
@@ -414,25 +473,40 @@ mod http_integration_tests {
                 serde_json::json!({"index": i}),
                 "sig",
             );
-            audit_service.append(event).await.expect("Failed to create event");
+            audit_service
+                .append(event)
+                .await
+                .expect("Failed to create event");
         }
 
         let after_creation = Utc::now();
 
         // Query with time range that includes the events
         use crate::services::audit::AuditQuery;
-        
+
         let query = AuditQuery::new()
             .agent(&agent_id)
             .from(before_creation)
             .to(after_creation);
-        
-        let result = audit_service.query(query).await.expect("Query should succeed");
-        
-        assert!(result.events.len() >= 3, "Should find at least 3 events in time range");
+
+        let result = audit_service
+            .query(query)
+            .await
+            .expect("Query should succeed");
+
+        assert!(
+            result.events.len() >= 3,
+            "Should find at least 3 events in time range"
+        );
         for event in &result.events {
-            assert!(event.timestamp >= before_creation, "Event should be after start time");
-            assert!(event.timestamp <= after_creation, "Event should be before end time");
+            assert!(
+                event.timestamp >= before_creation,
+                "Event should be after start time"
+            );
+            assert!(
+                event.timestamp <= after_creation,
+                "Event should be before end time"
+            );
         }
 
         // Query with time range before events were created
@@ -440,14 +514,22 @@ mod http_integration_tests {
             .agent(&agent_id)
             .from(before_creation - Duration::hours(2))
             .to(before_creation - Duration::hours(1));
-        
-        let old_result = audit_service.query(old_query).await.expect("Query should succeed");
-        
+
+        let old_result = audit_service
+            .query(old_query)
+            .await
+            .expect("Query should succeed");
+
         // Should not find the events we just created
-        let our_events: Vec<_> = old_result.events.iter()
+        let our_events: Vec<_> = old_result
+            .events
+            .iter()
             .filter(|e| e.agent_id == agent_id && e.timestamp >= before_creation)
             .collect();
-        assert!(our_events.is_empty(), "Should not find events outside time range");
+        assert!(
+            our_events.is_empty(),
+            "Should not find events outside time range"
+        );
 
         cleanup_test_agent(&pool, &agent_id).await;
     }
@@ -482,7 +564,10 @@ mod http_integration_tests {
             "test-sig",
         );
 
-        let recorded = audit_service.append(event).await.expect("Failed to create audit event");
+        let recorded = audit_service
+            .append(event)
+            .await
+            .expect("Failed to create audit event");
 
         // Create outbox entries for different topics
         let trending_entry = outbox_service
@@ -505,7 +590,10 @@ mod http_integration_tests {
         assert_eq!(reputation_entry.status, OutboxStatus::Pending);
 
         // Verify entries exist in database
-        let stats = outbox_service.get_stats().await.expect("Failed to get stats");
+        let stats = outbox_service
+            .get_stats()
+            .await
+            .expect("Failed to get stats");
         assert!(stats.pending >= 2, "Should have at least 2 pending entries");
 
         cleanup_test_agent(&pool, &agent_id).await;
@@ -542,7 +630,10 @@ mod http_integration_tests {
                 serde_json::json!({"index": i}),
                 "sig",
             );
-            let recorded = audit_service.append(event).await.expect("Failed to create event");
+            let recorded = audit_service
+                .append(event)
+                .await
+                .expect("Failed to create event");
             outbox_service
                 .insert(recorded.event_id, OutboxTopic::Trending)
                 .await
@@ -571,10 +662,9 @@ mod http_integration_tests {
             .expect("Worker 2 claim should succeed");
 
         // Worker 2 should not get the same events as worker 1
-        let worker1_ids: std::collections::HashSet<_> = worker1_events.iter()
-            .map(|e| e.outbox_id)
-            .collect();
-        
+        let worker1_ids: std::collections::HashSet<_> =
+            worker1_events.iter().map(|e| e.outbox_id).collect();
+
         for event in &worker2_events {
             assert!(
                 !worker1_ids.contains(&event.outbox_id),
@@ -601,9 +691,15 @@ mod http_integration_tests {
             }
         };
 
+        // Clean up any leftover pending events from previous test runs
+        sqlx::query("DELETE FROM event_outbox WHERE topic = 'trending' AND status IN ('pending', 'processing')")
+            .execute(&pool)
+            .await
+            .expect("Failed to clean up old events");
+
         let agent_id = create_test_agent(&pool).await;
         let audit_service = AuditService::new(pool.clone());
-        
+
         // Use custom config with known backoff values
         let config = OutboxConfig {
             max_attempts: 5,
@@ -623,17 +719,26 @@ mod http_integration_tests {
             serde_json::json!({}),
             "sig",
         );
-        let recorded = audit_service.append(event).await.expect("Failed to create event");
+        let recorded = audit_service
+            .append(event)
+            .await
+            .expect("Failed to create event");
         let outbox_entry = outbox_service
             .insert(recorded.event_id, OutboxTopic::Trending)
             .await
             .expect("Failed to create outbox entry");
 
         // Claim the event
-        let _ = outbox_service
+        let claimed = outbox_service
             .claim_events(OutboxTopic::Trending, "test-worker")
             .await
             .expect("Should claim events");
+        
+        // Verify the event was actually claimed
+        assert!(
+            claimed.iter().any(|e| e.outbox_id == outbox_entry.outbox_id),
+            "Our event should be in the claimed list"
+        );
 
         // Mark as failed - should schedule retry with backoff
         let new_status = outbox_service
@@ -642,16 +747,19 @@ mod http_integration_tests {
             .expect("mark_failed should succeed");
 
         // Should still be pending (not dead yet, only 1 attempt)
-        assert_eq!(new_status, OutboxStatus::Pending, "Should be pending for retry");
+        assert_eq!(
+            new_status,
+            OutboxStatus::Pending,
+            "Should be pending for retry"
+        );
 
         // Verify the event has the error recorded
-        let row: Option<(String, i32)> = sqlx::query_as(
-            "SELECT last_error, attempts FROM event_outbox WHERE outbox_id = $1"
-        )
-        .bind(outbox_entry.outbox_id)
-        .fetch_optional(&pool)
-        .await
-        .expect("Query should succeed");
+        let row: Option<(String, i32)> =
+            sqlx::query_as("SELECT last_error, attempts FROM event_outbox WHERE outbox_id = $1")
+                .bind(outbox_entry.outbox_id)
+                .fetch_optional(&pool)
+                .await
+                .expect("Query should succeed");
 
         let (last_error, attempts) = row.expect("Event should exist");
         assert_eq!(last_error, "Test failure");
@@ -678,7 +786,7 @@ mod http_integration_tests {
 
         let agent_id = create_test_agent(&pool).await;
         let audit_service = AuditService::new(pool.clone());
-        
+
         // Use config with low max_attempts for testing
         let config = OutboxConfig {
             max_attempts: 2,
@@ -698,7 +806,10 @@ mod http_integration_tests {
             serde_json::json!({}),
             "sig",
         );
-        let recorded = audit_service.append(event).await.expect("Failed to create event");
+        let recorded = audit_service
+            .append(event)
+            .await
+            .expect("Failed to create event");
         let outbox_entry = outbox_service
             .insert(recorded.event_id, OutboxTopic::Trending)
             .await
@@ -707,7 +818,7 @@ mod http_integration_tests {
         // Simulate multiple failures by directly updating attempts
         // First, set attempts to max_attempts
         sqlx::query(
-            "UPDATE event_outbox SET attempts = $1, status = 'processing' WHERE outbox_id = $2"
+            "UPDATE event_outbox SET attempts = $1, status = 'processing' WHERE outbox_id = $2",
         )
         .bind(2i32) // max_attempts
         .bind(outbox_entry.outbox_id)
@@ -721,7 +832,11 @@ mod http_integration_tests {
             .await
             .expect("mark_failed should succeed");
 
-        assert_eq!(new_status, OutboxStatus::Dead, "Should be dead-lettered after max attempts");
+        assert_eq!(
+            new_status,
+            OutboxStatus::Dead,
+            "Should be dead-lettered after max attempts"
+        );
 
         // Verify it's in the dead letters
         let dead_letters = outbox_service
@@ -729,7 +844,9 @@ mod http_integration_tests {
             .await
             .expect("get_dead_letters should succeed");
 
-        let found = dead_letters.iter().any(|e| e.outbox_id == outbox_entry.outbox_id);
+        let found = dead_letters
+            .iter()
+            .any(|e| e.outbox_id == outbox_entry.outbox_id);
         assert!(found, "Event should be in dead letters");
 
         cleanup_test_agent(&pool, &agent_id).await;
@@ -764,15 +881,19 @@ mod http_integration_tests {
                 serde_json::json!({"index": i}),
                 "sig",
             );
-            audit_service.append(event).await.expect("Failed to create event");
+            audit_service
+                .append(event)
+                .await
+                .expect("Failed to create event");
         }
 
         let app_state = create_test_app_state(pool.clone());
         let app = test::init_service(
             App::new()
                 .app_data(app_state)
-                .service(web::scope("/v1").configure(configure_audit_routes))
-        ).await;
+                .service(web::scope("/v1").configure(configure_audit_routes)),
+        )
+        .await;
 
         // Query by agent_id
         let req = test::TestRequest::get()
@@ -783,12 +904,13 @@ mod http_integration_tests {
         assert_eq!(resp.status(), 200, "Query should succeed");
 
         let body_bytes = test::read_body(resp).await;
-        let response: serde_json::Value = serde_json::from_slice(&body_bytes)
-            .expect("Response should be valid JSON");
+        let response: serde_json::Value =
+            serde_json::from_slice(&body_bytes).expect("Response should be valid JSON");
 
-        let events = response["data"]["events"].as_array()
+        let events = response["data"]["events"]
+            .as_array()
             .expect("Response should contain events array");
-        
+
         assert!(events.len() >= 3, "Should return at least 3 events");
 
         cleanup_test_agent(&pool, &agent_id).await;
@@ -822,14 +944,18 @@ mod http_integration_tests {
             serde_json::json!({"test": "single"}),
             "sig",
         );
-        let recorded = audit_service.append(event).await.expect("Failed to create event");
+        let recorded = audit_service
+            .append(event)
+            .await
+            .expect("Failed to create event");
 
         let app_state = create_test_app_state(pool.clone());
         let app = test::init_service(
             App::new()
                 .app_data(app_state)
-                .service(web::scope("/v1").configure(configure_audit_routes))
-        ).await;
+                .service(web::scope("/v1").configure(configure_audit_routes)),
+        )
+        .await;
 
         // Get the specific event
         let req = test::TestRequest::get()
@@ -840,8 +966,8 @@ mod http_integration_tests {
         assert_eq!(resp.status(), 200, "Get should succeed");
 
         let body_bytes = test::read_body(resp).await;
-        let response: serde_json::Value = serde_json::from_slice(&body_bytes)
-            .expect("Response should be valid JSON");
+        let response: serde_json::Value =
+            serde_json::from_slice(&body_bytes).expect("Response should be valid JSON");
 
         assert_eq!(response["data"]["event_id"], recorded.event_id.to_string());
         assert_eq!(response["data"]["agent_id"], agent_id);

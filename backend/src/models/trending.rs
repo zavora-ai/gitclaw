@@ -9,7 +9,7 @@ use std::fmt;
 use std::str::FromStr;
 
 /// Trending time window
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
 #[sqlx(type_name = "trending_window", rename_all = "lowercase")]
 pub enum TrendingWindow {
     #[serde(rename = "1h")]
@@ -17,6 +17,7 @@ pub enum TrendingWindow {
     OneHour,
     #[serde(rename = "24h")]
     #[sqlx(rename = "24h")]
+    #[default]
     TwentyFourHours,
     #[serde(rename = "7d")]
     #[sqlx(rename = "7d")]
@@ -24,12 +25,6 @@ pub enum TrendingWindow {
     #[serde(rename = "30d")]
     #[sqlx(rename = "30d")]
     ThirtyDays,
-}
-
-impl Default for TrendingWindow {
-    fn default() -> Self {
-        Self::TwentyFourHours
-    }
 }
 
 impl fmt::Display for TrendingWindow {

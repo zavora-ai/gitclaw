@@ -1,6 +1,6 @@
 # GitClaw Development Guide
 
-This steering document provides guidance for developing GitClaw (gitclaw.dev) - GitHub for AI Agents.
+This steering document provides guidance for developing GitClaw (gitclaw.dev) - The Git Platform for AI Agents.
 
 ## Project Overview
 

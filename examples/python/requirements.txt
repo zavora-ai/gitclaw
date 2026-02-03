@@ -1,0 +1,7 @@
+# GitClaw Python SDK Example Dependencies
+# Install the SDK from the repository:
+#   cd sdk/python && pip install -e .
+# Or install these dependencies directly:
+
+cryptography>=41.0.0
+httpx>=0.25.0

@@ -10,7 +10,7 @@ use crate::services::crypto::{CryptoError, CryptoService};
 /// Generate a valid Ed25519 public key for testing
 #[cfg(test)]
 pub fn generate_test_public_key() -> String {
-    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
     use ed25519_dalek::SigningKey;
     use rand::rngs::OsRng;
 
@@ -50,7 +50,7 @@ impl AgentRegistryService {
     }
 
     /// Register a new agent on the platform
-    /// 
+    ///
     /// This is the only unsigned operation - all subsequent actions require valid signatures.
     pub async fn register(
         &self,
@@ -65,19 +65,18 @@ impl AgentRegistryService {
         // Generate agent ID
         let agent_id = Uuid::new_v4().to_string();
         let created_at = Utc::now();
-        let capabilities_json = serde_json::to_value(&request.capabilities)
-            .unwrap_or_else(|_| serde_json::json!([]));
+        let capabilities_json =
+            serde_json::to_value(&request.capabilities).unwrap_or_else(|_| serde_json::json!([]));
 
         // Start transaction
         let mut tx = self.pool.begin().await?;
 
         // Check for existing agent name (within transaction for consistency)
-        let existing: Option<String> = sqlx::query_scalar(
-            "SELECT agent_id FROM agents WHERE agent_name = $1"
-        )
-        .bind(&request.agent_name)
-        .fetch_optional(&mut *tx)
-        .await?;
+        let existing: Option<String> =
+            sqlx::query_scalar("SELECT agent_id FROM agents WHERE agent_name = $1")
+                .bind(&request.agent_name)
+                .fetch_optional(&mut *tx)
+                .await?;
 
         if existing.is_some() {
             return Err(AgentRegistryError::AgentNameExists(request.agent_name));
@@ -88,7 +87,7 @@ impl AgentRegistryService {
             r#"
             INSERT INTO agents (agent_id, agent_name, public_key, capabilities, created_at)
             VALUES ($1, $2, $3, $4, $5)
-            "#
+            "#,
         )
         .bind(&agent_id)
         .bind(&request.agent_name)
@@ -103,7 +102,7 @@ impl AgentRegistryService {
             r#"
             INSERT INTO reputation (agent_id, score, cluster_ids, updated_at)
             VALUES ($1, 0.500, '[]', $2)
-            "#
+            "#,
         )
         .bind(&agent_id)
         .bind(created_at)
@@ -147,7 +146,7 @@ impl AgentRegistryService {
             SELECT agent_id, agent_name, public_key, capabilities, created_at
             FROM agents
             WHERE agent_id = $1
-            "#
+            "#,
         )
         .bind(agent_id)
         .fetch_optional(&self.pool)
@@ -169,7 +168,7 @@ impl AgentRegistryService {
             SELECT agent_id, agent_name, public_key, capabilities, created_at
             FROM agents
             WHERE agent_name = $1
-            "#
+            "#,
         )
         .bind(agent_name)
         .fetch_optional(&self.pool)
@@ -201,16 +200,19 @@ impl AgentRegistryService {
         }
 
         // Agent name can only contain alphanumeric, hyphen, underscore
-        if !name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+        if !name
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+        {
             return Err(AgentRegistryError::InvalidAgentName(
-                "Agent name can only contain alphanumeric characters, hyphens, and underscores".to_string(),
+                "Agent name can only contain alphanumeric characters, hyphens, and underscores"
+                    .to_string(),
             ));
         }
 
         Ok(())
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -252,11 +254,11 @@ mod tests {
     }
 
     /// **Property 1: Agent Registration Uniqueness**
-    /// 
+    ///
     /// For any agent name, at most one agent SHALL be registered with that name.
-    /// 
+    ///
     /// **Validates: Requirements 1.1, 1.2** | **Design: DR-1.1**
-    /// 
+    ///
     /// This property test verifies that:
     /// 1. The first registration with a given name succeeds
     /// 2. Any subsequent registration with the same name fails with AgentNameExists error
@@ -268,7 +270,7 @@ mod tests {
             #![proptest_config(ProptestConfig::with_cases(50))]
 
             /// Test that duplicate agent names are rejected
-            /// 
+            ///
             /// This test validates the uniqueness constraint by:
             /// 1. Generating a valid agent name
             /// 2. Simulating two registration attempts with the same name
@@ -300,7 +302,7 @@ mod tests {
                 // request2 MUST fail with AgentNameExists error.
                 // Since we can't run actual DB operations in proptest without async,
                 // we verify the validation logic that would detect duplicates.
-                
+
                 // Both names are identical, so the uniqueness check would catch this
                 prop_assert!(
                     request1.agent_name == request2.agent_name,
@@ -309,7 +311,7 @@ mod tests {
             }
 
             /// Test that different agent names are independent
-            /// 
+            ///
             /// This test validates that uniqueness is per-name, not global:
             /// - Two agents with different names should both be allowed
             #[test]
@@ -342,7 +344,7 @@ mod tests {
         }
 
         /// Integration test for agent name uniqueness with actual database
-        /// 
+        ///
         /// This test requires a running PostgreSQL database and validates
         /// the full registration flow including database constraints.
         #[tokio::test]

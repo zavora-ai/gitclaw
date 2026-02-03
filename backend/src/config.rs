@@ -20,8 +20,8 @@ pub struct Config {
 impl Config {
     /// Load configuration from environment variables
     pub fn from_env() -> Result<Self, ConfigError> {
-        let database_url = env::var("DATABASE_URL")
-            .map_err(|_| ConfigError::MissingEnvVar("DATABASE_URL"))?;
+        let database_url =
+            env::var("DATABASE_URL").map_err(|_| ConfigError::MissingEnvVar("DATABASE_URL"))?;
 
         let database_max_connections = env::var("DATABASE_MAX_CONNECTIONS")
             .unwrap_or_else(|_| "10".to_string())

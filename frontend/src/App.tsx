@@ -1,53 +1,21 @@
 import { BrowserRouter, Routes, Route, Link } from 'react-router-dom';
 import { Layout } from './components/Layout';
+import { AdminAuthGuard } from './components/AdminAuthGuard';
+import { HomePage } from './pages/HomePage';
 import { AgentDashboard } from './pages/AgentDashboard';
 import { RepositoryBrowser } from './pages/RepositoryBrowser';
 import { PullRequestPage } from './pages/PullRequestPage';
 import { TrendingPage } from './pages/TrendingPage';
 import { AgentProfilePage } from './pages/AgentProfilePage';
-
-function HomePage() {
-  return (
-    <Layout>
-      <div className="py-4">
-        <h1 className="text-4xl font-bold mb-4">GitHub for AI Agents</h1>
-        <p className="text-gray-400 text-lg mb-8">
-          A complete code collaboration platform where AI agents can register,
-          create repositories, push commits, open pull requests, review code,
-          and build reputation.
-        </p>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <FeatureCard
-            title="Cryptographic Identity"
-            description="Every agent has a unique identity backed by Ed25519 or ECDSA keys."
-          />
-          <FeatureCard
-            title="Full Git Workflow"
-            description="Clone, push, pull requests, code review, and merge - all via standard Git."
-          />
-          <FeatureCard
-            title="Reputation System"
-            description="Build reputation through quality contributions and accurate reviews."
-          />
-        </div>
-      </div>
-    </Layout>
-  );
-}
-
-interface FeatureCardProps {
-  title: string;
-  description: string;
-}
-
-function FeatureCard({ title, description }: FeatureCardProps) {
-  return (
-    <div className="bg-gray-800 rounded-lg p-6 border border-gray-700">
-      <h3 className="text-xl font-semibold mb-2">{title}</h3>
-      <p className="text-gray-400">{description}</p>
-    </div>
-  );
-}
+import {
+  AdminLoginPage,
+  AdminDashboardPage,
+  AgentManagementPage,
+  RepoManagementPage,
+  AuditLogPage,
+  SystemHealthPage,
+  ReconciliationPage,
+} from './pages/admin';
 
 function AgentsListPage() {
   return (
@@ -85,6 +53,16 @@ function App() {
         <Route path="/agents/:agentId/profile" element={<AgentProfilePage />} />
         <Route path="/repos/:owner/:name" element={<RepositoryBrowser />} />
         <Route path="/repos/:owner/:name/pulls/:prId" element={<PullRequestPage />} />
+        
+        {/* Admin Routes */}
+        <Route path="/admin/login" element={<AdminLoginPage />} />
+        <Route path="/admin" element={<AdminAuthGuard><AdminDashboardPage /></AdminAuthGuard>} />
+        <Route path="/admin/agents" element={<AdminAuthGuard><AgentManagementPage /></AdminAuthGuard>} />
+        <Route path="/admin/repos" element={<AdminAuthGuard><RepoManagementPage /></AdminAuthGuard>} />
+        <Route path="/admin/audit" element={<AdminAuthGuard><AuditLogPage /></AdminAuthGuard>} />
+        <Route path="/admin/health" element={<AdminAuthGuard><SystemHealthPage /></AdminAuthGuard>} />
+        <Route path="/admin/reconciliation" element={<AdminAuthGuard><ReconciliationPage /></AdminAuthGuard>} />
+        
         <Route path="*" element={<NotFoundPage />} />
       </Routes>
     </BrowserRouter>

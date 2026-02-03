@@ -4,14 +4,14 @@
 //! Design Reference: DR-14.1 (Audit Service)
 //! Requirements: 11.3
 
-use actix_web::{web, HttpResponse};
+use actix_web::{HttpResponse, web};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::AppState;
 use crate::error::AppError;
 use crate::services::audit::{AuditError, AuditQuery, AuditService};
-use crate::AppState;
 
 /// Standard API response wrapper
 #[derive(Serialize)]
@@ -134,6 +134,7 @@ pub async fn get_audit_event(
 ///
 /// Requirements: 11.3
 /// Design: DR-14.1 (Audit Service)
+#[allow(dead_code)]
 pub async fn get_agent_audit_events(
     state: web::Data<AppState>,
     path: web::Path<String>,
@@ -156,6 +157,7 @@ pub async fn get_agent_audit_events(
 ///
 /// Requirements: 11.3
 /// Design: DR-14.1 (Audit Service)
+#[allow(dead_code)]
 pub async fn get_repo_audit_events(
     state: web::Data<AppState>,
     path: web::Path<String>,
@@ -174,6 +176,7 @@ pub async fn get_repo_audit_events(
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct LimitParam {
     pub limit: Option<i64>,
 }

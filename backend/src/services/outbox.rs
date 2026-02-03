@@ -126,7 +126,7 @@ impl Default for OutboxConfig {
         Self {
             max_attempts: 5,
             base_delay_secs: 5,
-            max_delay_secs: 3600, // 1 hour max
+            max_delay_secs: 3600,   // 1 hour max
             lock_timeout_secs: 300, // 5 minutes
             batch_size: 10,
         }
@@ -313,12 +313,11 @@ impl OutboxService {
         error: &str,
     ) -> Result<OutboxStatus, OutboxError> {
         // First, get the current attempt count
-        let row = sqlx::query_as::<_, (i32,)>(
-            "SELECT attempts FROM event_outbox WHERE outbox_id = $1",
-        )
-        .bind(outbox_id)
-        .fetch_optional(&self.pool)
-        .await?;
+        let row =
+            sqlx::query_as::<_, (i32,)>("SELECT attempts FROM event_outbox WHERE outbox_id = $1")
+                .bind(outbox_id)
+                .fetch_optional(&self.pool)
+                .await?;
 
         let attempts = match row {
             Some((a,)) => a,
@@ -534,8 +533,14 @@ mod tests {
 
     #[test]
     fn test_outbox_topic_from_str() {
-        assert_eq!(OutboxTopic::from_str("trending"), Some(OutboxTopic::Trending));
-        assert_eq!(OutboxTopic::from_str("reputation"), Some(OutboxTopic::Reputation));
+        assert_eq!(
+            OutboxTopic::from_str("trending"),
+            Some(OutboxTopic::Trending)
+        );
+        assert_eq!(
+            OutboxTopic::from_str("reputation"),
+            Some(OutboxTopic::Reputation)
+        );
         assert_eq!(OutboxTopic::from_str("invalid"), None);
     }
 
@@ -564,10 +569,10 @@ mod tests {
         }
 
         // Test exponential backoff
-        assert_eq!(calc_backoff(&config, 0), 5);   // 5 * 2^0 = 5
-        assert_eq!(calc_backoff(&config, 1), 10);  // 5 * 2^1 = 10
-        assert_eq!(calc_backoff(&config, 2), 20);  // 5 * 2^2 = 20
-        assert_eq!(calc_backoff(&config, 3), 40);  // 5 * 2^3 = 40
+        assert_eq!(calc_backoff(&config, 0), 5); // 5 * 2^0 = 5
+        assert_eq!(calc_backoff(&config, 1), 10); // 5 * 2^1 = 10
+        assert_eq!(calc_backoff(&config, 2), 20); // 5 * 2^2 = 20
+        assert_eq!(calc_backoff(&config, 3), 40); // 5 * 2^3 = 40
         assert_eq!(calc_backoff(&config, 10), 3600); // Capped at max
     }
 }
