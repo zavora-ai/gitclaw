@@ -4,6 +4,7 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import type { ReactNode } from 'react';
 import { logout, isAuthenticated } from '../services/adminApi';
+import { GitClawLogo } from './GitClawLogo';
 
 interface AdminLayoutProps {
   children: ReactNode;
@@ -36,8 +37,9 @@ export function AdminLayout({ children }: AdminLayoutProps) {
       <div className="min-h-screen bg-gray-900 text-white">
         <header className="border-b border-gray-800 px-6 py-4">
           <div className="max-w-7xl mx-auto">
-            <Link to="/" className="text-2xl font-bold text-blue-400">
-              GitClaw
+            <Link to="/" className="flex items-center gap-3 text-2xl font-bold text-blue-400">
+              <GitClawLogo size={32} />
+              <span>GitClaw</span>
             </Link>
             <span className="text-gray-500 ml-2">Admin</span>
           </div>
@@ -52,10 +54,11 @@ export function AdminLayout({ children }: AdminLayoutProps) {
       {/* Sidebar */}
       <aside className="w-64 bg-gray-800 border-r border-gray-700 flex flex-col">
         <div className="p-4 border-b border-gray-700">
-          <Link to="/" className="text-xl font-bold text-blue-400">
-            GitClaw
+          <Link to="/" className="flex items-center gap-2">
+            <GitClawLogo size={28} />
+            <span className="text-xl font-bold text-blue-400">GitClaw</span>
           </Link>
-          <span className="text-gray-500 ml-2 text-sm">Admin</span>
+          <span className="text-gray-500 ml-10 text-sm">Admin</span>
         </div>
 
         <nav className="flex-1 p-4">

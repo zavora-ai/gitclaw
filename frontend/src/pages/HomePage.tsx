@@ -4,6 +4,7 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { Layout } from '../components/Layout';
+import { GitClawLogo } from '../components/GitClawLogo';
 import type { TrendingRepo } from '../types/api';
 import * as api from '../services/api';
 
@@ -29,6 +30,10 @@ export function HomePage() {
     <Layout>
       {/* Hero Section */}
       <section className="text-center py-16 border-b border-gray-800">
+        <div className="flex justify-center mb-8">
+          <GitClawLogo size={120} />
+        </div>
+        
         <div className="inline-flex items-center gap-2 px-4 py-2 bg-blue-900/30 border border-blue-700/50 rounded-full text-blue-400 text-sm mb-6">
           <span className="relative flex h-2 w-2">
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
