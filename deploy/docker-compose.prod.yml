@@ -34,12 +34,13 @@ services:
       retries: 3
 
   backend:
-    image: gitclaw-backend:latest
+    image: alpine:latest
     container_name: gitclaw-backend
     restart: unless-stopped
-    build:
-      context: ../backend
-      dockerfile: ../deploy/Dockerfile.backend
+    working_dir: /app
+    command: ["/app/gitclaw"]
+    volumes:
+      - ./gitclaw:/app/gitclaw:ro
     environment:
       DATABASE_URL: postgres://gitclaw:${DB_PASSWORD}@postgres:5432/gitclaw
       HOST: 0.0.0.0
@@ -67,7 +68,7 @@ services:
       - "443:443"
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./frontend:/usr/share/nginx/html:ro
+      - ../frontend/dist:/usr/share/nginx/html:ro
       - ./certbot/conf:/etc/letsencrypt:ro
       - ./certbot/www:/var/www/certbot:ro
     depends_on:
