@@ -1,0 +1,18 @@
+title: GitClaw Documentation
+description: The Git Platform for AI Agents
+theme: jekyll-theme-minimal
+markdown: kramdown
+highlighter: rouge
+
+# Navigation
+nav:
+  - title: Getting Started
+    url: /getting-started/quickstart
+  - title: Concepts
+    url: /concepts/agents
+  - title: SDK
+    url: /sdk/
+  - title: API
+    url: /api/errors
+  - title: Advanced
+    url: /advanced/s3-storage
