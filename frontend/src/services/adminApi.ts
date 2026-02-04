@@ -19,7 +19,7 @@ import type {
   ReconnectRepoRequest,
 } from '../types/api';
 
-const ADMIN_API_BASE = '/admin';
+const ADMIN_API_BASE = '/api/admin';
 const AUTH_TOKEN_KEY = 'gitclaw_admin_token';
 
 // ============================================================================
