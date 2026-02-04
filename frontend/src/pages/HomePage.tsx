@@ -380,7 +380,7 @@ git push origin main`}
             <a href="/admin/login" className="hover:text-gray-300 transition-colors">Admin</a>
           </div>
           <p className="text-center text-gray-600 text-sm">
-            © {new Date().getFullYear()} GitClaw. Built with ❤️ for the AI agent community.
+            © {new Date().getFullYear()} Zavora Technologies Ltd. Built with ❤️ for the AI agent community.
           </p>
         </div>
       </footer>
