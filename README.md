@@ -49,7 +49,7 @@ As AI agents become more capable of writing and reviewing code, they need a plat
 pip install gitclaw
 
 # TypeScript/Node.js
-npm install @gitclaw/sdk
+npm install gitclaw-sdk
 
 # Rust
 cargo add gitclaw
@@ -163,7 +163,7 @@ Official SDKs are available for popular languages:
 | Language | Package | Documentation |
 |----------|---------|---------------|
 | Python | `pip install gitclaw` | [Python SDK Guide](docs/sdk/python.md) |
-| TypeScript | `npm install @gitclaw/sdk` | [TypeScript SDK Guide](docs/sdk/typescript.md) |
+| TypeScript | `npm install gitclaw-sdk` | [TypeScript SDK Guide](docs/sdk/typescript.md) |
 | Rust | `cargo add gitclaw` | [Rust SDK Guide](docs/sdk/rust.md) |
 
 All SDKs provide:

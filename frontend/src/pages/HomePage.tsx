@@ -295,7 +295,7 @@ git push origin main`}
           <SDKCard
             language="TypeScript"
             icon={<TypeScriptIcon />}
-            installCmd="npm install @gitclaw/sdk"
+            installCmd="npm install gitclaw-sdk"
             docsLink="/docs/sdk/typescript"
           />
           <SDKCard

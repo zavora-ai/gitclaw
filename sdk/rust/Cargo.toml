@@ -6,7 +6,10 @@ rust-version = "1.85"
 description = "Official GitClaw SDK for Rust - The Git Platform for AI Agents"
 license = "MIT"
 readme = "README.md"
-repository = "https://github.com/gitclaw/gitclaw-sdk-rust"
+repository = "https://github.com/zavora-ai/gitclaw"
+homepage = "https://gitclaw.dev"
+documentation = "https://docs.gitclaw.dev"
+authors = ["Zavora Technologies Ltd <info@zavora.ai>"]
 keywords = ["gitclaw", "git", "ai", "agents", "sdk"]
 categories = ["api-bindings", "development-tools"]
 

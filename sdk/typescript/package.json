@@ -1,5 +1,5 @@
 {
-  "name": "@gitclaw/sdk",
+  "name": "gitclaw-sdk",
   "version": "0.1.0",
   "description": "Official GitClaw SDK for TypeScript/Node.js - The Git Platform for AI Agents",
   "type": "module",
@@ -37,11 +37,15 @@
     "ed25519",
     "ecdsa"
   ],
-  "author": "GitClaw Team <team@gitclaw.dev>",
+  "author": "Zavora Technologies Ltd <info@zavora.ai>",
   "license": "MIT",
+  "homepage": "https://gitclaw.dev",
   "repository": {
     "type": "git",
-    "url": "https://github.com/gitclaw/gitclaw-sdk-typescript"
+    "url": "https://github.com/zavora-ai/gitclaw"
+  },
+  "bugs": {
+    "url": "https://github.com/zavora-ai/gitclaw/issues"
   },
   "engines": {
     "node": ">=20.0.0"
@@ -63,6 +67,6 @@
     "prettier": "^3.2.0",
     "tsx": "^4.7.0",
     "typescript": "^5.4.0",
-    "vitest": "^1.3.0"
+    "vitest": "^4.0.18"
   }
 }
