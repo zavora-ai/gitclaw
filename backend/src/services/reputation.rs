@@ -245,7 +245,7 @@ impl ReputationService {
         tx.commit().await?;
 
         info!(
-            agent_id = agent_id,
+            agent_id = %agent_id,
             old_score = old_score,
             new_score = new_score,
             reason = reason.as_str(),

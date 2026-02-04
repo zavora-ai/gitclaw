@@ -404,7 +404,7 @@ impl DiskCache {
             }
         }
 
-        debug!(repo_id = repo_id, invalidated = count, "Repository cache invalidated");
+        debug!(repo_id = %repo_id, invalidated = count, "Repository cache invalidated");
         Ok(count)
     }
 
@@ -885,11 +885,11 @@ impl ObjectCache {
         if let Err(e) = self.invalidate_repository(repo_id).await {
             warn!(
                 error = %e,
-                repo_id = repo_id,
+                repo_id = %repo_id,
                 "Failed to invalidate cache after push"
             );
         } else {
-            debug!(repo_id = repo_id, "Cache invalidated after push");
+            debug!(repo_id = %repo_id, "Cache invalidated after push");
         }
     }
 
@@ -1034,8 +1034,8 @@ impl ObjectStorageBackend for ObjectCache {
             {
                 self.metrics.record_hit();
                 debug!(
-                    repo_id = repo_id,
-                    pack_hash = pack_hash,
+                    repo_id = %repo_id,
+                    pack_hash = %pack_hash,
                     "Packfile cache hit"
                 );
                 return Ok(PackfileData {
@@ -1049,8 +1049,8 @@ impl ObjectStorageBackend for ObjectCache {
         // Cache miss - fetch from backend
         self.metrics.record_miss();
         debug!(
-            repo_id = repo_id,
-            pack_hash = pack_hash,
+            repo_id = %repo_id,
+            pack_hash = %pack_hash,
             "Packfile cache miss, fetching from backend"
         );
 
@@ -1078,7 +1078,7 @@ impl ObjectStorageBackend for ObjectCache {
         // Invalidate cache first
         if let Some(ref cache) = self.disk_cache {
             if let Err(e) = cache.invalidate_repository(repo_id).await {
-                warn!(error = %e, repo_id = repo_id, "Failed to invalidate cache during delete");
+                warn!(error = %e, repo_id = %repo_id, "Failed to invalidate cache during delete");
             }
         }
 

@@ -1228,8 +1228,8 @@ impl ObjectStorageBackend for S3ObjectStorage {
         let data_len = data.len();
 
         debug!(
-            repo_id = repo_id,
-            oid = oid,
+            repo_id = %repo_id,
+            oid = %oid,
             object_type = %object_type,
             size = data_len,
             key = %key,
@@ -1297,7 +1297,7 @@ impl ObjectStorageBackend for S3ObjectStorage {
         let client = self.client.clone();
         let oid_owned = oid.to_string();
 
-        debug!(repo_id = repo_id, oid = oid, key = %key, "Retrieving object from S3");
+        debug!(repo_id = %repo_id, oid = %oid, key = %key, "Retrieving object from S3");
 
         let (data, object_type) = self
             .execute_with_retry("get_object", || {
@@ -1366,7 +1366,7 @@ impl ObjectStorageBackend for S3ObjectStorage {
         Self::verify_hash(&oid_owned, object_type, &data)?;
 
         debug!(
-            oid = oid,
+            oid = %oid,
             object_type = %object_type,
             size = data.len(),
             "Object retrieved and verified"
@@ -1388,7 +1388,7 @@ impl ObjectStorageBackend for S3ObjectStorage {
         let bucket = self.bucket.clone();
         let client = self.client.clone();
 
-        debug!(repo_id = repo_id, oid = oid, key = %key, "Deleting object from S3");
+        debug!(repo_id = %repo_id, oid = %oid, key = %key, "Deleting object from S3");
 
         self.execute_with_retry("delete_object", || {
             let key = key.clone();
@@ -1448,7 +1448,7 @@ impl ObjectStorageBackend for S3ObjectStorage {
         let token = continuation_token.map(String::from);
 
         debug!(
-            repo_id = repo_id,
+            repo_id = %repo_id,
             prefix = %full_prefix,
             "Listing objects in S3"
         );
@@ -1533,7 +1533,7 @@ impl ObjectStorageBackend for S3ObjectStorage {
         let client = self.client.clone();
         let oid_owned = oid.to_string();
 
-        debug!(repo_id = repo_id, oid = oid, key = %key, "Checking object existence in S3");
+        debug!(repo_id = %repo_id, oid = %oid, key = %key, "Checking object existence in S3");
 
         self.execute_with_retry("head_object", || {
             let key = key.clone();
@@ -1614,8 +1614,8 @@ impl ObjectStorageBackend for S3ObjectStorage {
         let index_vec = index.to_vec();
 
         debug!(
-            repo_id = repo_id,
-            pack_hash = pack_hash,
+            repo_id = %repo_id,
+            pack_hash = %pack_hash,
             pack_size = packfile.len(),
             idx_size = index.len(),
             "Storing packfile in S3"
@@ -1735,8 +1735,8 @@ impl ObjectStorageBackend for S3ObjectStorage {
         let pack_hash_owned = pack_hash.to_string();
 
         debug!(
-            repo_id = repo_id,
-            pack_hash = pack_hash,
+            repo_id = %repo_id,
+            pack_hash = %pack_hash,
             "Retrieving packfile from S3"
         );
 
@@ -1853,7 +1853,7 @@ impl ObjectStorageBackend for S3ObjectStorage {
             .await?;
 
         debug!(
-            pack_hash = pack_hash,
+            pack_hash = %pack_hash,
             pack_size = packfile.len(),
             idx_size = index.len(),
             "Packfile retrieved successfully"
@@ -1879,7 +1879,7 @@ impl ObjectStorageBackend for S3ObjectStorage {
         let prefix = format!("{}/", repo_id);
         let max_retries = self.config.max_retries;
 
-        debug!(repo_id = repo_id, prefix = %prefix, "Deleting all repository objects from S3");
+        debug!(repo_id = %repo_id, prefix = %prefix, "Deleting all repository objects from S3");
 
         let mut deleted_count = 0;
         let mut failed = Vec::new();
@@ -1957,13 +1957,13 @@ impl ObjectStorageBackend for S3ObjectStorage {
         // Log final result
         if failed.is_empty() {
             info!(
-                repo_id = repo_id,
+                repo_id = %repo_id,
                 deleted_count = deleted_count,
                 "Repository deletion completed successfully"
             );
         } else {
             warn!(
-                repo_id = repo_id,
+                repo_id = %repo_id,
                 deleted_count = deleted_count,
                 failed_count = failed.len(),
                 "Repository deletion completed with failures - mark for cleanup retry"

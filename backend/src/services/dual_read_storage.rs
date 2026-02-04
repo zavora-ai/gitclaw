@@ -322,8 +322,8 @@ impl ObjectStorageBackend for DualReadStorage {
     /// 3. If found in neither, return NotFound error
     async fn get_object(&self, repo_id: &str, oid: &str) -> Result<StoredObject, StorageError> {
         debug!(
-            repo_id = repo_id,
-            oid = oid,
+            repo_id = %repo_id,
+            oid = %oid,
             "DualReadStorage: attempting to get object"
         );
 
@@ -331,16 +331,16 @@ impl ObjectStorageBackend for DualReadStorage {
         match self.s3_storage.get_object(repo_id, oid).await {
             Ok(obj) => {
                 debug!(
-                    repo_id = repo_id,
-                    oid = oid,
+                    repo_id = %repo_id,
+                    oid = %oid,
                     "DualReadStorage: object found in S3"
                 );
                 return Ok(obj);
             }
             Err(StorageError::NotFound(_)) => {
                 debug!(
-                    repo_id = repo_id,
-                    oid = oid,
+                    repo_id = %repo_id,
+                    oid = %oid,
                     "DualReadStorage: object not found in S3, trying PostgreSQL fallback"
                 );
                 // Fall through to PostgreSQL fallback
@@ -348,8 +348,8 @@ impl ObjectStorageBackend for DualReadStorage {
             Err(e) => {
                 // For other errors (connection, rate limit, etc.), log and try fallback
                 warn!(
-                    repo_id = repo_id,
-                    oid = oid,
+                    repo_id = %repo_id,
+                    oid = %oid,
                     error = %e,
                     "DualReadStorage: S3 error, trying PostgreSQL fallback"
                 );
@@ -375,8 +375,8 @@ impl ObjectStorageBackend for DualReadStorage {
         data: &[u8],
     ) -> Result<(), StorageError> {
         debug!(
-            repo_id = repo_id,
-            oid = oid,
+            repo_id = %repo_id,
+            oid = %oid,
             object_type = %object_type,
             "DualReadStorage: storing object in S3"
         );
@@ -393,8 +393,8 @@ impl ObjectStorageBackend for DualReadStorage {
     /// will be cleaned up after migration completes.
     async fn delete_object(&self, repo_id: &str, oid: &str) -> Result<(), StorageError> {
         debug!(
-            repo_id = repo_id,
-            oid = oid,
+            repo_id = %repo_id,
+            oid = %oid,
             "DualReadStorage: deleting object from S3"
         );
 
@@ -415,7 +415,7 @@ impl ObjectStorageBackend for DualReadStorage {
         continuation_token: Option<&str>,
     ) -> Result<ObjectList, StorageError> {
         debug!(
-            repo_id = repo_id,
+            repo_id = %repo_id,
             prefix = ?prefix,
             "DualReadStorage: listing objects"
         );
@@ -450,7 +450,7 @@ impl ObjectStorageBackend for DualReadStorage {
             Err(e) => {
                 // For other errors, try PostgreSQL fallback
                 warn!(
-                    repo_id = repo_id,
+                    repo_id = %repo_id,
                     error = %e,
                     "DualReadStorage: S3 list error, trying PostgreSQL fallback"
                 );
@@ -470,8 +470,8 @@ impl ObjectStorageBackend for DualReadStorage {
         oid: &str,
     ) -> Result<Option<ObjectMetadata>, StorageError> {
         debug!(
-            repo_id = repo_id,
-            oid = oid,
+            repo_id = %repo_id,
+            oid = %oid,
             "DualReadStorage: checking object existence"
         );
 
@@ -486,8 +486,8 @@ impl ObjectStorageBackend for DualReadStorage {
             Err(e) => {
                 // Log error and try PostgreSQL
                 warn!(
-                    repo_id = repo_id,
-                    oid = oid,
+                    repo_id = %repo_id,
+                    oid = %oid,
                     error = %e,
                     "DualReadStorage: S3 head error, trying PostgreSQL fallback"
                 );
@@ -509,8 +509,8 @@ impl ObjectStorageBackend for DualReadStorage {
         index: &[u8],
     ) -> Result<(), StorageError> {
         debug!(
-            repo_id = repo_id,
-            pack_hash = pack_hash,
+            repo_id = %repo_id,
+            pack_hash = %pack_hash,
             "DualReadStorage: storing packfile in S3"
         );
 
@@ -529,8 +529,8 @@ impl ObjectStorageBackend for DualReadStorage {
         pack_hash: &str,
     ) -> Result<PackfileData, StorageError> {
         debug!(
-            repo_id = repo_id,
-            pack_hash = pack_hash,
+            repo_id = %repo_id,
+            pack_hash = %pack_hash,
             "DualReadStorage: getting packfile from S3"
         );
 
@@ -544,7 +544,7 @@ impl ObjectStorageBackend for DualReadStorage {
     /// will be cleaned up separately after migration completes.
     async fn delete_repository_objects(&self, repo_id: &str) -> Result<DeleteResult, StorageError> {
         debug!(
-            repo_id = repo_id,
+            repo_id = %repo_id,
             "DualReadStorage: deleting repository objects from S3"
         );
 

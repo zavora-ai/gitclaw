@@ -503,7 +503,7 @@ impl StorageMigrationService {
         .await?;
 
         info!(
-            repo_id = repo_id,
+            repo_id = %repo_id,
             objects_total = objects_total,
             "Initialized migration for repository"
         );
@@ -549,7 +549,7 @@ impl StorageMigrationService {
         .execute(&self.pool)
         .await?;
 
-        info!(repo_id = repo_id, "Migration completed for repository");
+        info!(repo_id = %repo_id, "Migration completed for repository");
         Ok(())
     }
 
@@ -569,7 +569,7 @@ impl StorageMigrationService {
         .execute(&self.pool)
         .await?;
 
-        error!(repo_id = repo_id, error = error, "Migration failed for repository");
+        error!(repo_id = %repo_id, error = %error, "Migration failed for repository");
         Ok(())
     }
 
@@ -676,7 +676,7 @@ impl StorageMigrationService {
         let mut objects_verified = 0usize;
 
         info!(
-            repo_id = repo_id,
+            repo_id = %repo_id,
             objects_total = objects_total,
             "Starting migration for repository"
         );
@@ -713,8 +713,8 @@ impl StorageMigrationService {
                                 }
                                 Err(e) => {
                                     warn!(
-                                        repo_id = repo_id,
-                                        oid = oid,
+                                        repo_id = %repo_id,
+                                        oid = %oid,
                                         error = %e,
                                         "Object verification failed"
                                     );
@@ -732,16 +732,16 @@ impl StorageMigrationService {
                         objects_migrated += 1;
 
                         debug!(
-                            repo_id = repo_id,
-                            oid = oid,
+                            repo_id = %repo_id,
+                            oid = %oid,
                             verified = verified,
                             "Object migrated successfully"
                         );
                     }
                     Err(e) => {
                         warn!(
-                            repo_id = repo_id,
-                            oid = oid,
+                            repo_id = %repo_id,
+                            oid = %oid,
                             error = %e,
                             "Failed to migrate object"
                         );
@@ -773,7 +773,7 @@ impl StorageMigrationService {
         let duration = start_time.elapsed();
 
         info!(
-            repo_id = repo_id,
+            repo_id = %repo_id,
             objects_migrated = objects_migrated,
             objects_failed = objects_failed,
             objects_verified = objects_verified,
@@ -833,7 +833,7 @@ impl StorageMigrationService {
                 }
                 Err(e) => {
                     error!(
-                        repo_id = repo_id,
+                        repo_id = %repo_id,
                         error = %e,
                         "Failed to migrate repository"
                     );
@@ -947,7 +947,7 @@ impl StorageMigrationService {
                 }
                 Err(e) => {
                     warn!(
-                        repo_id = repo_id,
+                        repo_id = %repo_id,
                         oid = row.oid,
                         error = %e,
                         "Object verification failed"
@@ -959,7 +959,7 @@ impl StorageMigrationService {
         }
 
         info!(
-            repo_id = repo_id,
+            repo_id = %repo_id,
             objects_verified = objects_verified,
             objects_failed = objects_failed,
             "Verification completed for repository"
@@ -984,7 +984,7 @@ impl StorageMigrationService {
 
         match status.status {
             MigrationStatus::Completed => {
-                info!(repo_id = repo_id, "Migration already completed");
+                info!(repo_id = %repo_id, "Migration already completed");
                 Ok(MigrationResult {
                     repo_id: repo_id.to_string(),
                     objects_migrated: status.objects_migrated as usize,

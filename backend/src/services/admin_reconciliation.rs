@@ -373,10 +373,10 @@ impl AdminReconciliationService {
         admin_id: &str,
     ) -> Result<(), AdminReconciliationError> {
         info!(
-            repo_id = repo_id,
-            owner_id = owner_id,
-            name = name,
-            admin_id = admin_id,
+            repo_id = %repo_id,
+            owner_id = %owner_id,
+            name = %name,
+            admin_id = %admin_id,
             "Reconnecting storage-only repository"
         );
 
@@ -440,9 +440,9 @@ impl AdminReconciliationService {
         tx.commit().await?;
 
         info!(
-            repo_id = repo_id,
-            owner_id = owner_id,
-            name = name,
+            repo_id = %repo_id,
+            owner_id = %owner_id,
+            name = %name,
             "Successfully reconnected storage-only repository"
         );
 
@@ -462,8 +462,8 @@ impl AdminReconciliationService {
         admin_id: &str,
     ) -> Result<(), AdminReconciliationError> {
         info!(
-            repo_id = repo_id,
-            admin_id = admin_id,
+            repo_id = %repo_id,
+            admin_id = %admin_id,
             "Deleting orphaned DB record"
         );
 
@@ -577,7 +577,7 @@ impl AdminReconciliationService {
         tx.commit().await?;
 
         info!(
-            repo_id = repo_id,
+            repo_id = %repo_id,
             name = repo_metadata.name,
             "Successfully deleted orphaned DB record"
         );
@@ -598,8 +598,8 @@ impl AdminReconciliationService {
         admin_id: &str,
     ) -> Result<(), AdminReconciliationError> {
         info!(
-            repo_id = repo_id,
-            admin_id = admin_id,
+            repo_id = %repo_id,
+            admin_id = %admin_id,
             "Deleting orphaned storage objects"
         );
 
@@ -661,7 +661,7 @@ impl AdminReconciliationService {
         tx.commit().await?;
 
         info!(
-            repo_id = repo_id,
+            repo_id = %repo_id,
             deleted_count = delete_result.deleted_count,
             failed_count = delete_result.failed.len(),
             "Successfully deleted orphaned storage objects"

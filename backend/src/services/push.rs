@@ -843,7 +843,7 @@ impl PushService {
         let object_count = objects.len();
 
         debug!(
-            repo_id = repo_id,
+            repo_id = %repo_id,
             object_count = object_count,
             threshold = PACKFILE_THRESHOLD,
             "Storing objects in S3"
@@ -852,7 +852,7 @@ impl PushService {
         if object_count > PACKFILE_THRESHOLD {
             // Store as packfile for efficiency (Requirement 4.2)
             info!(
-                repo_id = repo_id,
+                repo_id = %repo_id,
                 object_count = object_count,
                 "Storing {} objects as packfile (threshold: {})",
                 object_count,
@@ -871,7 +871,7 @@ impl PushService {
                 .await
                 .map_err(|e| {
                     error!(
-                        repo_id = repo_id,
+                        repo_id = %repo_id,
                         pack_hash = %pack_hash,
                         error = %e,
                         "Failed to store packfile in S3"
@@ -880,7 +880,7 @@ impl PushService {
                 })?;
 
             info!(
-                repo_id = repo_id,
+                repo_id = %repo_id,
                 pack_hash = %pack_hash,
                 object_count = object_count,
                 "Packfile stored successfully in S3"
@@ -894,7 +894,7 @@ impl PushService {
         } else {
             // Store as loose objects (Requirement 4.3)
             info!(
-                repo_id = repo_id,
+                repo_id = %repo_id,
                 object_count = object_count,
                 "Storing {} objects as loose objects (threshold: {})",
                 object_count,
@@ -909,7 +909,7 @@ impl PushService {
                     .await
                     .map_err(|e| {
                         error!(
-                            repo_id = repo_id,
+                            repo_id = %repo_id,
                             oid = %object.oid,
                             error = %e,
                             "Failed to store loose object in S3"
@@ -921,7 +921,7 @@ impl PushService {
                     })?;
 
                 debug!(
-                    repo_id = repo_id,
+                    repo_id = %repo_id,
                     oid = %object.oid,
                     object_type = ?object.object_type,
                     "Loose object stored in S3"
@@ -929,7 +929,7 @@ impl PushService {
             }
 
             info!(
-                repo_id = repo_id,
+                repo_id = %repo_id,
                 object_count = object_count,
                 "All loose objects stored successfully in S3"
             );
@@ -1086,8 +1086,8 @@ impl PushService {
         //
         // For now, we just log the event
         tracing::info!(
-            repo_id = repo_id,
-            agent_id = agent_id,
+            repo_id = %repo_id,
+            agent_id = %agent_id,
             ref_count = ref_updates.len(),
             "Push webhooks triggered"
         );

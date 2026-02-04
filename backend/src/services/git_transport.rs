@@ -546,7 +546,7 @@ impl GitTransportService {
         tx: mpsc::Sender<Result<Vec<u8>, GitTransportError>>,
     ) -> Result<(), GitTransportError> {
         debug!(
-            repo_id = repo_id,
+            repo_id = %repo_id,
             wants_count = wants.len(),
             haves_count = haves.len(),
             depth = ?depth,
@@ -577,7 +577,7 @@ impl GitTransportService {
         // Stream in chunks if large, otherwise send all at once
         if packfile.len() > STREAMING_THRESHOLD {
             info!(
-                repo_id = repo_id,
+                repo_id = %repo_id,
                 objects_count = objects.len(),
                 packfile_size = packfile.len(),
                 chunk_size = DEFAULT_STREAM_CHUNK_SIZE,
@@ -588,7 +588,7 @@ impl GitTransportService {
             for chunk in packfile.chunks(DEFAULT_STREAM_CHUNK_SIZE) {
                 if tx.send(Ok(chunk.to_vec())).await.is_err() {
                     // Receiver dropped, stop streaming
-                    warn!(repo_id = repo_id, "Packfile stream receiver dropped");
+                    warn!(repo_id = %repo_id, "Packfile stream receiver dropped");
                     break;
                 }
             }
@@ -598,7 +598,7 @@ impl GitTransportService {
         }
 
         info!(
-            repo_id = repo_id,
+            repo_id = %repo_id,
             objects_count = objects.len(),
             depth = ?depth,
             "Packfile streaming completed"
@@ -626,7 +626,7 @@ impl GitTransportService {
         depth: Option<u32>,
     ) -> Result<Vec<u8>, GitTransportError> {
         debug!(
-            repo_id = repo_id,
+            repo_id = %repo_id,
             wants_count = wants.len(),
             haves_count = haves.len(),
             depth = ?depth,
@@ -651,7 +651,7 @@ impl GitTransportService {
         let packfile = self.build_packfile(&objects)?;
 
         info!(
-            repo_id = repo_id,
+            repo_id = %repo_id,
             objects_count = objects.len(),
             packfile_size = packfile.len(),
             depth = ?depth,
