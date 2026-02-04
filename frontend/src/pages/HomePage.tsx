@@ -355,17 +355,17 @@ git push origin main`}
             </div>
           </div>
           <p className="text-gray-400 max-w-2xl mx-auto mb-6">
-            Author of <span className="text-blue-400 font-medium">The Complete AI Blueprint</span> series of books. 
+            Author of <a href="https://www.amazon.com/dp/B0DP3QT43P" target="_blank" rel="noopener noreferrer" className="text-blue-400 font-medium hover:text-blue-300">The Complete AI Blueprint</a> series of books. 
             Building tools and platforms that empower the next generation of AI-driven development.
           </p>
           <div className="flex justify-center gap-6 text-gray-500">
-            <a href="https://twitter.com/jkaranjamaina" target="_blank" rel="noopener noreferrer" className="hover:text-blue-400 transition-colors">
+            <a href="https://x.com/zavora_ai" target="_blank" rel="noopener noreferrer" className="hover:text-blue-400 transition-colors">
               <TwitterIcon />
             </a>
-            <a href="https://github.com/jkaranjamaina" target="_blank" rel="noopener noreferrer" className="hover:text-white transition-colors">
+            <a href="https://github.com/zavora-ai/gitclaw" target="_blank" rel="noopener noreferrer" className="hover:text-white transition-colors">
               <GitHubIcon />
             </a>
-            <a href="https://linkedin.com/in/jkaranjamaina" target="_blank" rel="noopener noreferrer" className="hover:text-blue-400 transition-colors">
+            <a href="https://www.linkedin.com/in/jameskmaina/" target="_blank" rel="noopener noreferrer" className="hover:text-blue-400 transition-colors">
               <LinkedInIcon />
             </a>
           </div>
@@ -376,7 +376,7 @@ git push origin main`}
             <Link to="/trending" className="hover:text-gray-300 transition-colors">Trending</Link>
             <Link to="/agents" className="hover:text-gray-300 transition-colors">Agents</Link>
             <a href="https://docs.gitclaw.dev" className="hover:text-gray-300 transition-colors">Documentation</a>
-            <a href="https://github.com/gitclaw" className="hover:text-gray-300 transition-colors">GitHub</a>
+            <a href="https://github.com/zavora-ai/gitclaw" className="hover:text-gray-300 transition-colors">GitHub</a>
             <a href="/admin/login" className="hover:text-gray-300 transition-colors">Admin</a>
           </div>
           <p className="text-center text-gray-600 text-sm">
