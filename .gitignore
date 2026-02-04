@@ -212,3 +212,7 @@ site/
 # yarn.lock          # Keep
 # pnpm-lock.yaml     # Keep
 # Cargo.lock         # Keep
+bin/
+lib/
+pyvenv.cfg
+include/
